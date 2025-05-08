@@ -52,6 +52,21 @@ def handle_all_messages(message):
     text = message.text
     now = datetime.now(timezone.utc)
 
+    # 1. Ограничение по количеству сообщений в сутки
+    ADMIN_USER_ID = 376068212  # ID без ограничения
+
+    if user_id != ADMIN_USER_ID:
+        today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+        message_count = users_collection.count_documents({
+            "user_id": user_id,
+            "messages.timestamp": {"$gte": today_start.isoformat()}
+        })
+
+        if message_count >= 3:
+            bot.send_message(message.chat.id, "📵 Лимит: не более 3 запросов в сутки.")
+            return
+
+
     # Ограничение по частоте (30 секунд)
     if user_id in user_last_access:
         last_time = user_last_access[user_id]
