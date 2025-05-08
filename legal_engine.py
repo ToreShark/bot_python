@@ -49,7 +49,7 @@ for filename in os.listdir(docs_path):
         with open(os.path.join(docs_path, filename), "r", encoding="utf-8") as f:
             content = f.read()
             docs.append(Document(page_content=content, metadata={"source": filename}))
-            print(Fore.YELLOW + f"[LOG] Загружен документ: {filename}" + Fore.RESET)
+            # print(Fore.YELLOW + f"[LOG] Загружен документ: {filename}" + Fore.RESET)
 
 
 
@@ -59,7 +59,7 @@ text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
     chunk_overlap=50
 )
 splits = text_splitter.split_documents(docs)
-print(Fore.YELLOW + f"[LOG] Всего фрагментов после разбиения: {len(splits)}" + Fore.RESET)
+# print(Fore.YELLOW + f"[LOG] Всего фрагментов после разбиения: {len(splits)}" + Fore.RESET)
 for s in splits[:3]:
     print(Fore.LIGHTBLACK_EX + s.page_content[:200] + "..." + Fore.RESET)
 
@@ -120,7 +120,7 @@ def retrieve_documents(sub_questions):
     all_retrieved_docs = {}
 
     for sub_q in sub_questions:
-        print(Fore.BLUE + f"[LOG] Запрос: {sub_q}" + Fore.RESET)
+        # print(Fore.BLUE + f"[LOG] Запрос: {sub_q}" + Fore.RESET)
         multi_qs = generate_multi_queries_for_subquestion(sub_q)
 
         doc_lists = []
@@ -128,12 +128,13 @@ def retrieve_documents(sub_questions):
             docs_found = retriever.get_relevant_documents(q)
             # print(Fore.LIGHTMAGENTA_EX + f"[RETRIEVER] Запрос: {q} — Найдено документов: {len(docs_found)}" + Fore.RESET)
             for d in docs_found[:1]:
-                print(Fore.LIGHTCYAN_EX + f"Фрагмент: {d.page_content[:100]}..." + Fore.RESET)
+                # print(Fore.LIGHTCYAN_EX + f"Фрагмент: {d.page_content[:100]}..." + Fore.RESET)
+                 pass  # или оставь print, если нужно временно
             doc_lists.append(docs_found)
         
         unique_docs = get_unique_union(doc_lists)
         all_retrieved_docs[sub_q] = unique_docs  # 🔥 Вставь это!
-        print(Fore.YELLOW + f"[LOG] Уникальных документов для подвопроса: {len(unique_docs)}" + Fore.RESET)
+        # print(Fore.YELLOW + f"[LOG] Уникальных документов для подвопроса: {len(unique_docs)}" + Fore.RESET)
 
     return all_retrieved_docs
 
@@ -152,8 +153,8 @@ def generate_sub_questions(query):
     # Run
     sub_questions = generate_queries_decomposition.invoke({"question": query})
     questions_str = "\n".join(sub_questions)
-    print(Fore.MAGENTA + "=====  ПОИСКОВЫЕ ПОДВОПРОСЫ: =====" + Fore.RESET)
-    print(Fore.WHITE + questions_str + Fore.RESET + "\n")
+    # print(Fore.MAGENTA + "=====  ПОИСКОВЫЕ ПОДВОПРОСЫ: =====" + Fore.RESET)
+    # print(Fore.WHITE + questions_str + Fore.RESET + "\n")
     return sub_questions 
       
 
@@ -191,7 +192,7 @@ def generate_qa_pairs(retrieved_docs_dict):
         }
 
         generate_qa = prompt_qa | llm | StrOutputParser()
-        print(Fore.LIGHTYELLOW_EX + "[CONTEXT] " + context[:500] + "..." + Fore.RESET)
+        # print(Fore.LIGHTYELLOW_EX + "[CONTEXT] " + context[:500] + "..." + Fore.RESET)
         answer = generate_qa.invoke(inputs)
        
 
@@ -199,8 +200,8 @@ def generate_qa_pairs(retrieved_docs_dict):
         q_a_pair = format_qa_pair(sub_question, answer)
         q_a_pairs += "\n --- \n" + q_a_pair
 
-        print(Fore.GREEN + f"=====  Q/A PAIR: =====" + Fore.RESET)
-        print(Fore.CYAN + f"Q: {sub_question}\nA: {answer}" + Fore.RESET + "\n")
+        # print(Fore.GREEN + f"=====  Q/A PAIR: =====" + Fore.RESET)
+        # print(Fore.CYAN + f"Q: {sub_question}\nA: {answer}" + Fore.RESET + "\n")
 
     return q_a_pairs
         
@@ -251,16 +252,25 @@ template = """Вот набор пар вопрос-ответ из базы з�
 prompt = ChatPromptTemplate.from_template(template)
 
 
-# Query
-def query(query):
-    sub_questions = generate_sub_questions(query)
+def query(query_text, progress_callback=lambda x: None):
+    # Шаг 1: генерация подвопросов
+    progress_callback("🔍 Генерирую юридические подвопросы...")
+    sub_questions = generate_sub_questions(query_text)
+
+    # Шаг 2: поиск документов
+    progress_callback("📚 Ищу релевантные документы...")
     retrieved_docs_dict = retrieve_documents(sub_questions)
+
+    # Шаг 3: генерация Q/A по документам
+    progress_callback("⚖️ Анализирую законодательство и судебную практику...")
     q_a_pairs = generate_qa_pairs(retrieved_docs_dict)
 
+    # Шаг 4: итоговый ответ
+    progress_callback("🧠 Формирую итоговый юридический вывод...")
     final_rag_chain = (
         prompt
         | llm
         | StrOutputParser()
     )
 
-    return final_rag_chain.invoke({"question": query, "context": q_a_pairs})
+    return final_rag_chain.invoke({"question": query_text, "context": q_a_pairs})

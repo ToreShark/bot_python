@@ -3,6 +3,8 @@ import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from legal_engine import query
+from datetime import datetime, timezone, timedelta
+import time
 
 load_dotenv()
 
@@ -17,6 +19,9 @@ client = MongoClient(MONGO_URI)
 # Выбор базы данных и коллекции
 db = client['telegram_bot']  # Название базы данных
 users_collection = db['users']  # Коллекция для пользователей и их сообщений
+
+# Простая антивандальная структура: последний доступ
+user_last_access = {}
 
 @bot.message_handler(commands=['start'])
 def main(message):
@@ -45,21 +50,66 @@ def handle_legal_query(message):
 def handle_all_messages(message):
     user_id = message.from_user.id
     text = message.text
+    now = datetime.now(timezone.utc)
 
-    # Сохраняем сообщение пользователя в MongoDB
+    # Ограничение по частоте (30 секунд)
+    if user_id in user_last_access:
+        last_time = user_last_access[user_id]
+        if now - last_time < timedelta(minutes=5):
+            bot.send_message(message.chat.id, "⏳ Подождите 5 минут перед следующим запросом.")
+            return
+    user_last_access[user_id] = now
+
+   # Сохраняем сообщение с timestamp
     users_collection.update_one(
         {"user_id": user_id},
-        {"$push": {"messages": text}}
+        {"$push": {
+            "messages": {
+                "text": text,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        }}
     )
 
     # Отвечаем через LangChain-пайплайн
     try:
-        bot.send_message(message.chat.id, "⌛ Обрабатываю ваш вопрос...")
-        answer = query(text)
-        bot.send_message(message.chat.id, answer)
+        # Отправляем "ожидание" и получаем ID сообщения
+        status_msg = bot.send_message(message.chat.id, "⌛ Обрабатываю ваш вопрос...")
+
+       # Функция для обновления текста в этом сообщении
+        def progress_callback(stage_text):
+            try:
+                bot.edit_message_text(chat_id=message.chat.id,
+                                      message_id=status_msg.message_id,
+                                      text=stage_text)
+            except Exception as e:
+                print(f"[WARN] Не удалось обновить статус: {e}")
+
+        # Запускаем обработку с обновлением статуса
+        answer = query(text, progress_callback=progress_callback)
+
+        # Сохраняем ответ с timestamp
+        users_collection.update_one(
+            {"user_id": user_id},
+            {"$push": {
+                "answers": {
+                    "text": answer,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+            }}
+        )
+        # Финальный ответ
+        bot.edit_message_text(chat_id=message.chat.id,
+                              message_id=status_msg.message_id,
+                              text=answer)
     except Exception as e:
         print(f"[ERROR] {e}")
         bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке. Попробуйте позже.")
 
 
-bot.polling(none_stop=True)
+while True:
+    try:
+        bot.polling(none_stop=True, timeout=60)
+    except Exception as e:
+        print(f"[ERROR] polling crashed: {e}")
+        time.sleep(5)  # ждём и перезапускаем
