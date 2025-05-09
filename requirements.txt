@@ -1,0 +1,10 @@
+pyTelegramBotAPI
+python-dotenv
+pymongo
+beautifulsoup4
+langchain
+langchain-community
+langchain-core
+langchain-anthropic
+langchain-openai
+colorama
