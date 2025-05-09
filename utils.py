@@ -6,8 +6,8 @@ def format_qa_pair(question, answer):
     
     formatted_string = ""
     formatted_string += f"{Fore.GREEN}Question: {question}{Fore.RESET}\n{Fore.WHITE}Answer: {answer}\n\n {Fore.RESET}"
-    print("=====  QUESTION/ANSWER PAIRS: =====")
-    print(formatted_string.strip())
+    # print("=====  QUESTION/ANSWER PAIRS: =====")
+    # print(formatted_string.strip())
     return formatted_string.strip()
 
 

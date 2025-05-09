@@ -36,9 +36,55 @@ def main(message):
             "user_id": user_id,
             "first_name": first_name,
             "last_name": last_name,
+            "access": False,
+            "message_limit": 0,
             "messages": []  # Пустой список для сообщений
         })
-    bot.send_message(message.chat.id, "Привет!")
+    # Сообщение пользователю
+    bot.send_message(message.chat.id, "👋 Привет! Ваша заявка отправлена администратору.")
+
+    # Уведомление админу
+    # ADMIN_USER_ID = 376068212
+    ADMIN_USER_IDS = [376068212, 827743984]
+    if user_id not in ADMIN_USER_IDS:
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        admin_text = (
+            "🆕 Пользователь хочет начать общение с ботом:\n"
+            f"👤 Имя: {first_name} {last_name}\n"
+            f"🆔 ID: {user_id}\n"
+            f"🕒 Время: {timestamp}"
+        )
+        for admin_id in ADMIN_USER_IDS:
+            bot.send_message(admin_id, admin_text)
+
+@bot.message_handler(commands=['grant_access'])
+def grant_access(message):
+    ADMIN_USER_IDS = [376068212, 827743984]
+    if message.from_user.id not in ADMIN_USER_IDS:
+        bot.reply_to(message, "⛔ У вас нет прав для выполнения этой команды.")
+        return
+
+    try:
+        _, user_id_str, limit_str = message.text.split()
+        user_id = int(user_id_str)
+        message_limit = int(limit_str)
+
+        result = users_collection.update_one(
+            {"user_id": user_id},
+            {"$set": {"access": True, "message_limit": message_limit}}
+        )
+
+        if result.matched_count == 0:
+            bot.reply_to(message, f"❌ Пользователь с ID {user_id} не найден.")
+            return
+
+        # Уведомляем пользователя
+        bot.send_message(user_id, f"✅ Вам предоставлен доступ. Лимит: {message_limit} сообщений.")
+        bot.reply_to(message, f"✅ Доступ предоставлен пользователю {user_id}.")
+    except Exception as e:
+        print(f"[ERROR grant_access] {e}")
+        bot.reply_to(message, "⚠️ Ошибка. Используйте команду так: /grant_access [user_id] [кол-во_сообщений]")
+
 
 @bot.message_handler(func=lambda message: message.text.startswith('/law '))
 def handle_legal_query(message):
@@ -52,10 +98,24 @@ def handle_all_messages(message):
     text = message.text
     now = datetime.now(timezone.utc)
 
-    # 1. Ограничение по количеству сообщений в сутки
-    ADMIN_USER_ID = 376068212  # ID без ограничения
+    user = users_collection.find_one({"user_id": user_id})
 
-    if user_id != ADMIN_USER_ID:
+    if not user:
+        bot.send_message(message.chat.id, "❌ Сначала отправьте /start, чтобы зарегистрироваться.")
+        return
+
+    if not user.get("access", False):
+        bot.send_message(message.chat.id, "⛔ Доступ не активирован. Ожидайте подтверждения от администратора.")
+        return
+
+    if user.get("message_limit", 0) <= 0:
+        bot.send_message(message.chat.id, "📵 Ваш лимит сообщений исчерпан. Обратитесь к администратору.")
+        return
+
+    # 1. Ограничение по количеству сообщений в сутки
+    # ADMIN_USER_ID = 376068212  # ID без ограничения
+    ADMIN_USER_IDS = [376068212, 827743984]
+    if user_id not in ADMIN_USER_IDS:
         today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
         message_count = users_collection.count_documents({
             "user_id": user_id,
@@ -112,6 +172,11 @@ def handle_all_messages(message):
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
             }}
+        )
+        # Уменьшаем лимит
+        users_collection.update_one(
+            {"user_id": user_id},
+            {"$inc": {"message_limit": -1}}
         )
         # Финальный ответ
         bot.edit_message_text(chat_id=message.chat.id,
