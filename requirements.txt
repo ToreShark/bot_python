@@ -7,4 +7,5 @@ langchain-community
 langchain-core
 langchain-anthropic
 langchain-openai
+chromadb
 colorama
