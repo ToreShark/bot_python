@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from legal_engine import query
 from datetime import datetime, timezone, timedelta
+from telebot import types
 import time
 
 load_dotenv()
@@ -40,8 +41,18 @@ def main(message):
             "message_limit": 0,
             "messages": []  # Пустой список для сообщений
         })
+    # Кнопки с вариантами оплаты
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("💰 Оплатить 5 000 ₸", callback_data="pay_5000"))
+    markup.add(types.InlineKeyboardButton("💰 Оплатить 10 000 ₸", callback_data="pay_10000"))
+    markup.add(types.InlineKeyboardButton("💰 Оплатить 15 000 ₸", callback_data="pay_15000"))
+
     # Сообщение пользователю
-    bot.send_message(message.chat.id, "👋 Привет! Ваша заявка отправлена администратору.")
+    bot.send_message(
+        message.chat.id,
+        "💳 Выберите сумму оплаты, чтобы получить доступ:",
+        reply_markup=markup
+        )
 
     # Уведомление админу
     # ADMIN_USER_ID = 376068212
@@ -55,7 +66,34 @@ def main(message):
             f"🕒 Время: {timestamp}"
         )
         for admin_id in ADMIN_USER_IDS:
-            bot.send_message(admin_id, admin_text)
+            try:
+                bot.send_message(admin_id, admin_text)
+            except Exception as e:
+                print(f"[WARN] Не удалось отправить сообщение админу {admin_id}: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("pay_"))
+def handle_payment_callback(call):
+    amount_map = {
+        "pay_5000": "5 000",
+        "pay_10000": "10 000",
+        "pay_15000": "15 000"
+    }
+    amount = amount_map.get(call.data, "неизвестная сумма")
+
+    if amount == "неизвестная сумма":
+        bot.send_message(call.message.chat.id, "⚠️ Ошибка: сумма не распознана.")
+        bot.answer_callback_query(call.id)
+        return
+
+    payment_text = (
+        f"💳 Для оплаты {amount} ₸ используйте ссылку:\n"
+        "https://pay.kaspi.kz/pay/izbl0ktq\n\n"
+        "📸 После оплаты пришлите сюда скриншот подтверждения."
+    )
+
+    bot.send_message(call.message.chat.id, payment_text)
+    bot.answer_callback_query(call.id)
+
 
 @bot.message_handler(commands=['grant_access'])
 def grant_access(message):
@@ -185,6 +223,31 @@ def handle_all_messages(message):
     except Exception as e:
         print(f"[ERROR] {e}")
         bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке. Попробуйте позже.")
+
+@bot.message_handler(content_types=['photo', 'document'])
+def handle_payment_file(message):
+    user_id = message.from_user.id
+    ADMIN_USER_IDS = [376068212, 827743984]
+
+    caption = (
+        f"📩 Пользователь отправил файл, возможно, это квитанция:\n"
+        f"👤 Telegram ID: {user_id}\n"
+        f"📎 Тип: {'фото' if message.content_type == 'photo' else 'документ'}\n"
+        f"📸 Переслано автоматически для проверки."
+    )
+
+    for admin_id in ADMIN_USER_IDS:
+        try:
+            bot.forward_message(chat_id=admin_id, from_chat_id=message.chat.id, message_id=message.message_id)
+            bot.send_message(admin_id, caption)
+        except Exception as e:
+            print(f"[WARN] Не удалось переслать файл админу {admin_id}: {e}")
+
+    bot.send_message(
+        message.chat.id,
+        "✅ Спасибо, файл получен. Мы проверим оплату в ближайшее время.\n\n"
+        "📞 Если у вас есть вопросы, свяжитесь с администратором: +77007000000"
+    )
 
 
 while True:
