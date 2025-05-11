@@ -5,6 +5,7 @@ from pymongo import MongoClient
 from legal_engine import query
 from datetime import datetime, timezone, timedelta
 from telebot import types
+from document_processor import process_uploaded_file
 import time
 
 load_dotenv()
@@ -227,8 +228,40 @@ def handle_all_messages(message):
 @bot.message_handler(content_types=['photo', 'document'])
 def handle_payment_file(message):
     user_id = message.from_user.id
-    ADMIN_USER_IDS = [376068212, 827743984]
+    file_info = bot.get_file(message.document.file_id)
+    file_name = message.document.file_name
+    file_path = f"temp/{file_name}"
+    os.makedirs("temp", exist_ok=True)
+    with open(file_path, "wb") as f:
+        f.write(bot.download_file(file_info.file_path))
 
+    try:
+        result = process_uploaded_file(file_path, user_id)
+        print(f"[DEBUG] Result from processor: {result}")
+
+        # Показываем результат пользователю
+        if "message" in result:
+            bot.send_message(message.chat.id, result["message"])
+
+        # Только для квитанции отправляем благодарность
+        if result["type"] == "payment_receipt":
+            bot.send_message(
+                message.chat.id,
+                "✅ Спасибо, файл получен. Мы проверим оплату в ближайшее время.\n\n"
+                "📞 Если у вас есть вопросы, свяжитесь с администратором: +77007000000"
+            )
+
+    except Exception as e:
+        print(f"[ERROR] Ошибка обработки файла: {e}")
+        bot.send_message(message.chat.id, "⚠️ Ошибка при обработке файла. Попробуйте позже.")
+    finally:
+        try:
+            os.remove(file_path)
+        except Exception as e:
+            print(f"[WARN] Не удалось удалить файл {file_path}: {e}")
+
+    # Сообщение админам
+    ADMIN_USER_IDS = [376068212, 827743984]
     caption = (
         f"📩 Пользователь отправил файл, возможно, это квитанция:\n"
         f"👤 Telegram ID: {user_id}\n"
@@ -243,11 +276,6 @@ def handle_payment_file(message):
         except Exception as e:
             print(f"[WARN] Не удалось переслать файл админу {admin_id}: {e}")
 
-    bot.send_message(
-        message.chat.id,
-        "✅ Спасибо, файл получен. Мы проверим оплату в ближайшее время.\n\n"
-        "📞 Если у вас есть вопросы, свяжитесь с администратором: +77007000000"
-    )
 
 
 while True:
