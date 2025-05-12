@@ -10,3 +10,4 @@ langchain-openai
 chromadb
 colorama
 pymupdf
+pytesseract
