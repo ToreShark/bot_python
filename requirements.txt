@@ -11,3 +11,4 @@ chromadb
 colorama
 pymupdf
 pytesseract
+pdf2image
