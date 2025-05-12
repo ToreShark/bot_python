@@ -7,6 +7,9 @@ from datetime import datetime, timezone, timedelta
 from telebot import types
 from document_processor import process_uploaded_file
 import time
+import requests
+from pydub import AudioSegment
+import openai
 
 load_dotenv()
 
@@ -224,6 +227,136 @@ def handle_all_messages(message):
     except Exception as e:
         print(f"[ERROR] {e}")
         bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке. Попробуйте позже.")
+
+@bot.message_handler(content_types=['voice'])
+def handle_voice_message(message):
+    user_id = message.from_user.id
+    now = datetime.now(timezone.utc)
+    
+    # Проверки доступа (аналогично функции handle_all_messages)
+    user = users_collection.find_one({"user_id": user_id})
+    if not user:
+        bot.send_message(message.chat.id, "❌ Сначала отправьте /start, чтобы зарегистрироваться.")
+        return
+    
+    if not user.get("access", False):
+        bot.send_message(message.chat.id, "⛔ Доступ не активирован. Ожидайте подтверждения от администратора.")
+        return
+    
+    if user.get("message_limit", 0) <= 0:
+        bot.send_message(message.chat.id, "📵 Ваш лимит сообщений исчерпан. Обратитесь к администратору.")
+        return
+    
+    # Здесь также добавьте проверки ограничений по количеству сообщений в сутки и частоте
+    # как в функции handle_all_messages
+    
+    # Получаем информацию о голосовом сообщении
+    file_info = bot.get_file(message.voice.file_id)
+    file_path = file_info.file_path
+    
+    # Создаем временную директорию, если её нет
+    os.makedirs("temp", exist_ok=True)
+    
+    # Путь для сохранения аудиофайла
+    audio_path = f"temp/voice_{message.voice.file_id}.ogg"
+    audio_path_mp3 = f"temp/voice_{message.voice.file_id}.mp3"
+    
+    # Скачиваем аудиофайл
+    downloaded_file = bot.download_file(file_path)
+    with open(audio_path, 'wb') as f:
+        f.write(downloaded_file)
+    
+    # Отправляем сообщение о начале обработки
+    status_msg = bot.send_message(message.chat.id, "🎤 Распознаю голосовое сообщение...")
+    
+    try:
+        # Конвертируем ogg в mp3 (Whisper API лучше работает с mp3)
+        audio = AudioSegment.from_ogg(audio_path)
+        audio.export(audio_path_mp3, format="mp3")
+        
+        # Используем OpenAI Whisper API для распознавания речи
+        openai.api_key = os.getenv("OPENAI_API_KEY")
+        
+        with open(audio_path_mp3, "rb") as audio_file:
+            transcript = openai.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="ru"
+            )
+        
+        recognized_text = transcript.text
+        
+        # Обновляем статус с распознанным текстом
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id,
+            text=f"🎤 Распознанный текст:\n\n{recognized_text}\n\n⌛ Обрабатываю ваш вопрос..."
+        )
+        
+        # Сохраняем сообщение в базу данных
+        users_collection.update_one(
+            {"user_id": user_id},
+            {"$push": {
+                "messages": {
+                    "text": recognized_text,
+                    "type": "voice",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            }}
+        )
+        
+        # Функция для обновления текста в сообщении статуса
+        def progress_callback(stage_text):
+            try:
+                bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=status_msg.message_id,
+                    text=stage_text
+                )
+            except Exception as e:
+                print(f"[WARN] Не удалось обновить статус: {e}")
+        
+        # Обрабатываем распознанный текст через LangChain-пайплайн
+        answer = query(recognized_text, progress_callback=progress_callback)
+        
+        # Сохраняем ответ в базу данных
+        users_collection.update_one(
+            {"user_id": user_id},
+            {"$push": {
+                "answers": {
+                    "text": answer,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+            }}
+        )
+        
+        # Уменьшаем лимит сообщений пользователя
+        users_collection.update_one(
+            {"user_id": user_id},
+            {"$inc": {"message_limit": -1}}
+        )
+        
+        # Отправляем финальный ответ
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id,
+            text=answer
+        )
+    
+    except Exception as e:
+        print(f"[ERROR] Ошибка при обработке голосового сообщения: {e}")
+        bot.send_message(
+            message.chat.id,
+            "❌ Произошла ошибка при обработке голосового сообщения. Пожалуйста, попробуйте позже или отправьте ваш вопрос текстом."
+        )
+    
+    finally:
+        # Удаляем временные файлы
+        try:
+            os.remove(audio_path)
+            os.remove(audio_path_mp3)
+        except Exception as e:
+            print(f"[WARN] Не удалось удалить временные файлы: {e}")
 
 @bot.message_handler(content_types=['photo', 'document'])
 def handle_payment_file(message):
