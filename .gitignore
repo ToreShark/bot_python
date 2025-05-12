@@ -1,1 +1,38 @@
 .env
+# Виртуальное окружение Python
+.venv/
+venv/
+ENV/
+env/
+
+# Конфиденциальные файлы (например, ключи API)
+.env
+
+# Кэш Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# Логи
+*.log
+
+# Файлы IDE (Visual Studio Code, PyCharm и др.)
+.vscode/
+.idea/
+
+# Системные файлы (macOS, Windows)
+.DS_Store
+Thumbs.db
+
+# Бинарные файлы и временные сборки
+*.so
+*.dylib
+*.dll
+*.exe
+
+# PDF и другие временные документы (если ты не хочешь их в Git)
+*.pdf
+*.docx
+*.xlsx

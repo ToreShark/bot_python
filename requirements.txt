@@ -9,3 +9,4 @@ langchain-anthropic
 langchain-openai
 chromadb
 colorama
+pymupdf
