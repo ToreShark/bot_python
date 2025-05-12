@@ -15,13 +15,13 @@ docs_collection = db['documents']
 def process_uploaded_file(filepath, user_id):
     # 1. Пытаемся извлечь текст напрямую
     text = extract_text_from_pdf(filepath)
-    print(f"[DEBUG] Direct PDF text length: {len(text)}")
+    # print(f"[DEBUG] Direct PDF text length: {len(text)}")
 
     # 2. Если текста нет — OCR
     if not text.strip():
-        print("[INFO] PDF не содержит текста. Запускаем OCR...")
+        # print("[INFO] PDF не содержит текста. Запускаем OCR...")
         text = ocr_file(filepath)
-        print(f"[DEBUG] OCR text length: {len(text)}")
+        # print(f"[DEBUG] OCR text length: {len(text)}")
 
     # 3. Определяем тип документа
     doc_type = detect_document_type(text)
@@ -38,6 +38,7 @@ def process_uploaded_file(filepath, user_id):
      # Распознаём кредитный отчёт
     if doc_type == "credit_report":
         parsed = extract_credit_data_with_total(text)
+        # print(f"[DEBUG] Результат парсинга: {parsed}")
 
         # Сохраняем в отдельную коллекцию
         db['credit_reports'].insert_one({

@@ -237,7 +237,7 @@ def handle_payment_file(message):
 
     try:
         result = process_uploaded_file(file_path, user_id)
-        print(f"[DEBUG] Result from processor: {result}")
+        # print(f"[DEBUG] Result from processor: {result}")
 
         # Показываем результат пользователю
         if "message" in result:
