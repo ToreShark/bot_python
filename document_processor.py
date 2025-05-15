@@ -6,6 +6,21 @@ from datetime import datetime
 from text_extractor import extract_text_from_pdf
 from ocr import ocr_file, detect_document_type
 from credit_parser import extract_credit_data_with_total, format_summary
+from dotenv import load_dotenv
+
+load_dotenv()  # Подгружаем .env переменные
+
+# Определяем режим
+env = os.getenv("ENV", "prod").lower()
+
+# Подключение к MongoDB
+client = MongoClient(os.getenv("MONGO_URI"))
+
+# Используем базу в зависимости от режима
+db_name = "tg_bot_dev" if env == "dev" else "telegram_bot"
+db = client[db_name]
+
+docs_collection = db['documents']
 
 # Подключение к MongoDB
 client = MongoClient(os.getenv("MONGO_URI"))

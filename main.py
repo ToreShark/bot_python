@@ -13,6 +13,8 @@ import openai
 
 load_dotenv()
 
+print(f"[INFO] Текущий режим: {os.getenv('ENV', 'prod')}")
+
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 bot = telebot.TeleBot(BOT_TOKEN)

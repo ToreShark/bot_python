@@ -20,6 +20,8 @@ from utils import format_qa_pair, format_qa_pairs
 
 from colorama import Fore
 import warnings
+import os
+import hashlib
 
 warnings.filterwarnings("ignore")
 
@@ -65,9 +67,58 @@ for s in splits[:3]:
 
 
 # 3. Create vectorstore
-vectorstore = Chroma.from_documents(documents=splits, embedding=OpenAIEmbeddings(model="text-embedding-3-large"))
-retriever = vectorstore.as_retriever()
+# # Пути для хранения
+persist_directory = "./chroma_db"
+hash_file = "./docs_hash.txt"
 
+# Функция для вычисления хеша документов
+def get_documents_hash(documents):
+    """Создает хеш-сумму для всех документов"""
+    content = "".join([doc.page_content for doc in documents])
+    return hashlib.md5(content.encode()).hexdigest()
+
+# Получаем текущий хеш документов
+current_hash = get_documents_hash(splits)
+
+# Проверяем, нужно ли обновлять embeddings
+need_update = True
+if os.path.exists(hash_file):
+    with open(hash_file, "r") as f:
+        stored_hash = f.read().strip()
+    
+    # Если хеш не изменился, обновление не требуется
+    if current_hash == stored_hash and os.path.exists(persist_directory):
+        need_update = False
+        print(Fore.GREEN + f"[LOG] Документы не изменились, используем существующие embeddings" + Fore.RESET)
+
+# Создаем или загружаем векторное хранилище
+if need_update:
+    print(Fore.YELLOW + f"[LOG] Документы изменились или хранилище не существует. Создаем новые embeddings..." + Fore.RESET)
+    
+    # Создаем embeddings и сохраняем в Chroma
+    vectorstore = Chroma.from_documents(
+        documents=splits, 
+        embedding=OpenAIEmbeddings(model="text-embedding-3-large"),
+        persist_directory=persist_directory
+    )
+    
+    # Сохраняем векторное хранилище и хеш
+    vectorstore.persist()
+    with open(hash_file, "w") as f:
+        f.write(current_hash)
+    
+    print(Fore.GREEN + f"[LOG] Создано новое векторное хранилище в {persist_directory}" + Fore.RESET)
+else:
+    # Загружаем существующее хранилище
+    embedding_function = OpenAIEmbeddings(model="text-embedding-3-large")
+    vectorstore = Chroma(
+        persist_directory=persist_directory, 
+        embedding_function=embedding_function
+    )
+    print(Fore.GREEN + f"[LOG] Загружено существующее векторное хранилище из {persist_directory}" + Fore.RESET)
+
+# Создаем retriever как обычно
+retriever = vectorstore.as_retriever()
 
 # 1. DECOMPOSITION
 # template = """Вы эксперт по банкротству в Казахстане. 
