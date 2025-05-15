@@ -36,3 +36,7 @@ Thumbs.db
 *.pdf
 *.docx
 *.xlsx
+
+echo "chroma_db/" >> .gitignore
+
+chroma_db/
