@@ -55,7 +55,7 @@ class BaseParser:
         """Преобразует строковое представление числа в float"""
         return clean_number(value)
     
-    def extract_personal_info(self, text: str) -> Dict:
+    # def extract_personal_info(self, text: str) -> Dict:
         """Извлекает личные данные субъекта кредитного отчета"""
         personal_info = {}
         
@@ -186,6 +186,102 @@ class BaseParser:
         
         return personal_info
 
+    def extract_personal_info(self, text: str) -> Dict:
+        """
+        Улучшенный метод извлечения персональной информации,
+        работающий как с ГКБ, так и с ПКБ форматами
+        """
+        personal_info = {}
+        
+        # Проверяем, является ли отчет от ПКБ
+        is_pkb = "ПОЛНЫЙ ПЕРСОНАЛЬНЫЙ КРЕДИТНЫЙ ОТЧЕТ" in text
+        
+        if is_pkb:
+            # Извлечение ФИО для ПКБ
+            pkb_name_pattern = r"\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}\n([А-ЯЁІӘӨҰҚҢҮҺ]+) \((\d{2}\.\d{2}\.\d{4}) г\.р\.\)"
+            pkb_name_match = re.search(pkb_name_pattern, text)
+            
+            if pkb_name_match:
+                # Получаем ФИО и дату рождения
+                raw_name = pkb_name_match.group(1).strip()
+                birth_date = pkb_name_match.group(2).strip()
+                personal_info["full_name"] = raw_name
+                personal_info["birth_date"] = birth_date
+                
+                # Пытаемся разделить слитное ФИО
+                # Для казахских/русских имен можно использовать словари известных фамилий/имен
+                # или эвристики на основе средних длин фамилии, имени и отчества
+                
+                # ИИН извлекаем отдельно
+                iin_match = re.search(r"ИИН:\s*(\d{12})", text)
+                if iin_match:
+                    personal_info["iin"] = iin_match.group(1).strip()
+                
+                # Адрес
+                address_match = re.search(r"МЕСТО ЖИТЕЛЬСТВА:\s*([^\n]+)", text)
+                if address_match:
+                    personal_info["address"] = address_match.group(1).strip()
+        else:
+            # Используем существующую логику из первого парсера для ГКБ
+            name_patterns = [
+                r"(?:ФИО|Получатель|Субъект кредитной истории):\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)",
+                r"Фамилия:\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)[\r\n].*?Имя:\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)[\r\n].*?Отчество:\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)"
+            ]
+            
+            for pattern in name_patterns:
+                match = re.search(pattern, text)
+                if match:
+                    if len(match.groups()) == 1:
+                        # Если одна группа - это полное ФИО
+                        personal_info["full_name"] = match.group(1).strip()
+                        # Пробуем разделить на части
+                        parts = personal_info["full_name"].split()
+                        if len(parts) >= 2:
+                            personal_info["last_name"] = parts[0]
+                            personal_info["first_name"] = parts[1]
+                            if len(parts) >= 3:
+                                personal_info["middle_name"] = ' '.join(parts[2:])
+                    elif len(match.groups()) == 3:
+                        # Если три группы - это фамилия, имя, отчество
+                        personal_info["last_name"] = match.group(1).strip()
+                        personal_info["first_name"] = match.group(2).strip()
+                        personal_info["middle_name"] = match.group(3).strip()
+                        personal_info["full_name"] = f"{personal_info['last_name']} {personal_info['first_name']} {personal_info['middle_name']}"
+                    break
+                    
+            # Ищем ИИН стандартным методом
+            iin_pattern = r"(?:ИИН|Идентификационный номер):\s*(\d{12})"
+            iin_match = re.search(iin_pattern, text)
+            if iin_match:
+                personal_info["iin"] = iin_match.group(1).strip()
+            
+            # Поиск даты рождения
+            dob_pattern = r"Дата рождения:\s*(\d{2}\.\d{2}\.\d{4})"
+            dob_match = re.search(dob_pattern, text)
+            if dob_match:
+                personal_info["birth_date"] = dob_match.group(1).strip()
+            
+            # Адрес стандартным методом
+            address_patterns = [
+                r"Место жительства.*?Страна:\s*([^\r\n]+).*?Область:\s*([^\r\n]+).*?Город:\s*([^\r\n]+).*?Улица:\s*([^\r\n]+)",
+                r"Место прописки.*?Страна:\s*([^\r\n]+).*?Область:\s*([^\r\n]+).*?Город:\s*([^\r\n]+).*?Улица:\s*([^\r\n]+)",
+                r"КАЗАХСТАН,\s*([^,]+),\s*([^,]+),\s*([^,]+)"
+            ]
+            
+            for pattern in address_patterns:
+                address_match = re.search(pattern, text, re.DOTALL)
+                if address_match:
+                    components = []
+                    for i in range(1, len(address_match.groups()) + 1):
+                        value = address_match.group(i)
+                        if value and value.strip() not in ["Нет данных", "-"]:
+                            components.append(value.strip())
+                    
+                    if components:
+                        personal_info["address"] = ", ".join(components)
+                        break
+        
+        return personal_info
 # Детальный парсер (подробный отчет ПКБ)
 class DetailedParser(BaseParser):
     def can_parse(self, text: str) -> bool:
@@ -913,18 +1009,247 @@ class FallbackParser(BaseParser):
             "obligations": obligations,
             "parsing_quality": "low"  # Индикатор качества парсинга
         }
+    
+# Создаем новый класс для отчетов ПКБ, наследуя от BaseParser
+class PKBParser(BaseParser):
+    """Парсер для отчетов Первого Кредитного Бюро (ПКБ)"""
+    
+    def can_parse(self, text: str) -> bool:
+        """Определяет, подходит ли данный текст для парсера ПКБ"""
+        # Проверяем наличие ключевых фраз, характерных для ПКБ
+        return ("ПОЛНЫЙ ПЕРСОНАЛЬНЫЙ КРЕДИТНЫЙ ОТЧЕТ" in text or 
+                "ПЕРСОНАЛЬНЫЙ КРЕДИТНЫЙ РЕЙТИНГ" in text or
+                "ДОГОВОРЫ В КРЕДИТНОЙ ИСТОРИИ" in text)
+    
+    def extract_data(self, text: str) -> Dict:
+        """Извлекает данные из отчета ПКБ"""
+        logger.info("Обработка отчета ПКБ")
+        
+        # Получаем личную информацию
+        personal_info = self.extract_personal_info(text)
+        
+        # Извлекаем активные кредиты используя логику из второго парсера
+        active_credits = self.extract_active_credits(text)
+        
+        # Рассчитываем общие суммы
+        total_debt = sum(credit.get("total_debt", 0) for credit in active_credits)
+        total_monthly_payment = sum(credit.get("periodic_payment", 0) for credit in active_credits)
+        overdue_creditors = sum(1 for credit in active_credits if credit.get("overdue_days", 0) > 0)
+        
+        return {
+            "personal_info": personal_info,
+            "total_debt": round(total_debt, 2),
+            "total_monthly_payment": round(total_monthly_payment, 2),
+            "total_obligations": len(active_credits),
+            "overdue_obligations": overdue_creditors,
+            "obligations": self.convert_to_standard_format(active_credits)
+        }
+
+    def extract_active_credits(self, text: str) -> list:
+        """
+        Извлекает информацию об активных кредитах из отчета ПКБ.
+        Этот метод адаптирован из второго парсера.
+        """
+        active_credits = []
+
+        # Проверяем на казахский или русский язык отчета
+        is_kazakh = "МІНДЕТТЕМЕЛЕР БОЙЫНША ЖАЛПЫ АҚПАРАТ" in text or "ҚОЛДАНЫСТАҒЫ ШАРТТАР" in text
+        is_russian = "ИНФОРМАЦИЯ ПО ДЕЙСТВУЮЩИМ КРЕДИТНЫМ ДОГОВОРАМ" in text or "ДЕЙСТВУЮЩИЕ ДОГОВОРА" in text
+
+        # Обработка казахскоязычного отчета
+        if is_kazakh:
+            # Ищем блоки с обязательствами
+            blocks = list(re.finditer(r"Міндеттеме\s+\d+", text))
+            for i, match in enumerate(blocks):
+                start = match.start()
+                end = blocks[i + 1].start() if i + 1 < len(blocks) else len(text)
+                block = text[start:end]
+
+                # Извлекаем информацию о кредиторе
+                creditor_match = re.search(r"Кредитор:\s*(.*?)[\r\n]", block)
+                if not creditor_match:
+                    continue
+                creditor = creditor_match.group(1).strip()
+                
+                # Пропускаем ломбарды
+                if re.search(r"ломбард", creditor, re.IGNORECASE):
+                    continue
+
+                # Извлекаем информацию о просрочке
+                overdue_match = re.search(r"Мерзімі өткен жарналар сомасы\s*\/валюта:\s*([\d\s.,]+)\s*KZT", block)
+                overdue = self.clean_number(overdue_match.group(1)) if overdue_match else 0
+
+                # Извлекаем баланс
+                balance_match = re.search(r"(?:Шарт бойынша берешек қалдығы|Алдағы төлемдер сомасы)(?:\/валюта)?[:]\s*([\d\s.,]+)\s*KZT", block)
+                balance = self.clean_number(balance_match.group(1)) if balance_match else overdue
+
+                # Извлекаем дни просрочки
+                days_match = re.search(r"Мерзімі өткен күндер саны:\s*(\d+)", block)
+                overdue_days = int(days_match.group(1)) if days_match else 0
+
+                # Извлекаем ежемесячный платеж
+                monthly_match = re.search(r"Ай сайынғы төлем сомасы\s*\/\s*валюта:\s*([\d\s.,]+)\s*KZT", block)
+                monthly = self.clean_number(monthly_match.group(1)) if monthly_match else 0
+
+                # Извлекаем статус кредита
+                status_match = re.search(r"Шарттың мәртебесі:\s*(.*?)[\r\n]", block)
+                status = status_match.group(1).strip() if status_match else ""
+
+                # Номер контракта
+                number_match = re.search(r"(?:Шарт нөмірі|Келісімшарт коды):\s*(.*?)[\r\n]", block)
+                contract_number = number_match.group(1).strip() if number_match else ""
+
+                # Тип финансирования
+                financing_match = re.search(r"Қаржыландыру түрі:\s*(.*?)[\r\n]", block)
+                financing_type = financing_match.group(1).strip() if financing_match else ""
+
+                # Добавляем кредит, если есть значимые данные
+                if any([balance, overdue, overdue_days, monthly]):
+                    active_credits.append({
+                        "creditor": creditor,
+                        "total_debt": balance if balance else overdue,
+                        "overdue_amount": overdue,
+                        "overdue_days": overdue_days,
+                        "periodic_payment": monthly if monthly else (balance * 0.05),
+                        "contract_number": contract_number,
+                        "status": status,
+                        "financing_type": financing_type,
+                        "is_active": True
+                    })
+
+        # Обработка русскоязычного отчета
+        if is_russian:
+            # Поиск таблицы с кредитами
+            match = re.search(r"ИНФОРМАЦИЯ ПО ДЕЙСТВУЮЩИМ КРЕДИТНЫМ ДОГОВОРАМ[\s\S]+?Итого:", text)
+            if match:
+                table_text = match.group()
+                lines = table_text.split("\n")[1:-1]
+                for line in lines:
+                    if not line.strip() or "Вид" in line:
+                        continue
+                        
+                    # Разделяем строку по пробелам
+                    parts = re.split(r"\s{2,}", line.strip())
+                    if len(parts) >= 8:
+                        try:
+                            financing_type, creditor = parts[0], parts[1]
+                            if re.search(r"ломбард", creditor, re.IGNORECASE):
+                                continue
+                                
+                            # Извлекаем числовые значения
+                            amounts = [self.clean_number(a) for a in re.findall(r"(\d[\d\s.,]+)\s*KZT", line)]
+                            
+                            # Извлекаем дни просрочки
+                            overdue_days = int(re.findall(r"(\d+)(?:\s*-)?$", line)[0]) if re.findall(r"(\d+)(?:\s*-)?$", line) else 0
+                            
+                            if len(amounts) >= 4:
+                                contract_amount, periodic_payment, balance, overdue_amount = amounts[:4]
+                                if any([balance, overdue_amount, overdue_days, periodic_payment]):
+                                    active_credits.append({
+                                        "creditor": creditor,
+                                        "financing_type": financing_type,
+                                        "total_debt": balance if balance else overdue_amount,
+                                        "periodic_payment": periodic_payment,
+                                        "overdue_amount": overdue_amount,
+                                        "overdue_days": overdue_days,
+                                        "status": "Просрочка" if overdue_days > 0 else "Стандартный кредит",
+                                        "is_active": True
+                                    })
+                        except Exception as e:
+                            logger.error(f"Ошибка при обработке строки: {e}")
+                            continue
+
+            # Поиск информации о контрактах
+            contract_block_match = re.search(r"ДЕЙСТВУЮЩИЕ ДОГОВОРА[\s\S]+?(?=ЗАВЕРШЕННЫЕ ДОГОВОРЫ|$)", text, re.IGNORECASE)
+            if contract_block_match:
+                for contract in re.finditer(r"КОНТРАКТ\s+\d+[\s\S]+?(?=КОНТРАКТ\s+\d+|ЗАВЕРШЕННЫЕ ДОГОВОРЫ|$)", contract_block_match.group(), re.IGNORECASE):
+                    block = contract.group()
+                    
+                    # Извлекаем информацию о кредиторе
+                    creditor_match = re.search(r"Источник информации \(Кредитор\):\s*([^\n]+)", block)
+                    if not creditor_match:
+                        continue
+                        
+                    creditor = creditor_match.group(1).strip()
+                    if re.search(r"ломбард", creditor, re.IGNORECASE):
+                        continue
+
+                    # Извлекаем остальную информацию
+                    debt = self.clean_number(re.search(r"(?:Непогашенная сумма по кредиту|Использованная сумма \(подлежащая погашению\)):\s*([\d\s.,]+)\s*KZT", block).group(1)) if re.search(r"(?:Непогашенная сумма по кредиту|Использованная сумма \(подлежащая погашению\)):\s*([\d\s.,]+)\s*KZT", block) else 0
+                    overdue = self.clean_number(re.search(r"Сумма просроченных взносов:\s*([\d\s.,]+)\s*KZT", block).group(1)) if re.search(r"Сумма просроченных взносов:\s*([\d\s.,]+)\s*KZT", block) else 0
+                    overdue_days = int(re.search(r"Количество дней просрочки:\s*(\d+)", block).group(1)) if re.search(r"Количество дней просрочки:\s*(\d+)", block) else 0
+                    payment = self.clean_number(re.search(r"(?:Сумма периодического платежа|Минимальный платеж):\s*([\d\s.,]+)\s*KZT", block).group(1)) if re.search(r"(?:Сумма периодического платежа|Минимальный платеж):\s*([\d\s.,]+)\s*KZT", block) else 0
+                    
+                    # Статус контракта
+                    status = re.search(r"Статус договора:\s*([^\n]+)", block)
+                    contract_number = re.search(r"Номер договора:\s*([^\n]+)", block)
+                    financing_type = re.search(r"Вид финансирования:\s*([^\n]+)", block)
+
+                    # Добавляем, если есть значимые данные
+                    if any([debt, overdue, overdue_days, payment]):
+                        active_credits.append({
+                            "creditor": creditor,
+                            "total_debt": debt if debt else overdue,
+                            "overdue_amount": overdue,
+                            "overdue_days": overdue_days,
+                            "periodic_payment": payment if payment else ((debt if debt else overdue) * 0.05),
+                            "contract_number": contract_number.group(1).strip() if contract_number else "",
+                            "status": status.group(1).strip() if status else "",
+                            "financing_type": financing_type.group(1).strip() if financing_type else "",
+                            "is_active": True
+                        })
+
+        # Удаляем дубликаты, используя кредитора и номер контракта как ключ
+        seen = set()
+        unique = []
+        for item in active_credits:
+            key = f"{item['creditor']}|{item.get('contract_number', '')}"
+            if key not in seen:
+                seen.add(key)
+                unique.append(item)
+
+        # Сортируем по сумме долга
+        final_credits = [c for c in unique if not re.search(r"ломбард", c["creditor"], re.IGNORECASE)]
+        final_credits.sort(key=lambda x: -x["total_debt"])
+        return final_credits
+    
+    def convert_to_standard_format(self, active_credits):
+        """
+        Преобразует активные кредиты из формата ПКБ в стандартный формат для системы.
+        """
+        obligations = []
+        for credit in active_credits:
+            obligation = {
+                "creditor": credit["creditor"],
+                "monthly_payment": credit.get("periodic_payment", 0),
+                "balance": round(credit.get("total_debt", 0), 2),
+                "overdue_amount": round(credit.get("overdue_amount", 0), 2),
+                "overdue_days": credit.get("overdue_days", 0),
+                "overdue_status": credit.get("status", "нет данных")
+            }
+            
+            # Добавляем контракт, если он есть
+            if "contract_number" in credit:
+                obligation["contract"] = credit["contract_number"]
+                
+            obligations.append(obligation)
+        
+        return obligations
+
+
 
 def create_parser_chain():
     """Создает цепочку парсеров"""
+    pkb = PKBParser()  # Новый парсер для ПКБ
     detailed = DetailedParser()
     short = ShortParser()
     kazakh = KazakhParser()
     fallback = FallbackParser()
     
-    # Установка цепочки
-    detailed.set_next(short).set_next(kazakh).set_next(fallback)
+    # Установка цепочки, начиная с парсера ПКБ
+    pkb.set_next(detailed).set_next(short).set_next(kazakh).set_next(fallback)
     
-    return detailed  # Возвращаем первый парсер в цепочке
+    return pkb  # Возвращаем первый парсер в цепочке
 
 def extract_credit_data_with_total(text: str) -> Dict:
     """Основная функция для извлечения данных из кредитного отчета"""

@@ -12,3 +12,5 @@ colorama
 pymupdf
 pytesseract
 pdf2image
+pydub
+
