@@ -687,7 +687,56 @@ class KazakhParser(BaseParser):
             return False
         
         return has_kazakh_indicators
-    
+    def extract_personal_info(self, text: str) -> Dict:
+        """Извлекает личные данные из казахскоязычного отчета"""
+        personal_info = {}
+        
+        # Ищем ФИО в казахском формате
+        last_name_match = re.search(r"Тегі:\s*([А-ЯЁІӘӨҰҚҢҮҺ]+)", text)
+        first_name_match = re.search(r"Аты:\s*([А-ЯЁІӘӨҰҚҢҮҺ]+)", text)
+        middle_name_match = re.search(r"Әкесінің аты:\s*([А-ЯЁІӘӨҰҚҢҮҺ]+)", text)
+        
+        if last_name_match and first_name_match:
+            personal_info["last_name"] = last_name_match.group(1).strip()
+            personal_info["first_name"] = first_name_match.group(1).strip()
+            
+            if middle_name_match:
+                personal_info["middle_name"] = middle_name_match.group(1).strip()
+                
+            # Формируем полное имя
+            full_name_parts = [personal_info["last_name"], personal_info["first_name"]]
+            if "middle_name" in personal_info:
+                full_name_parts.append(personal_info["middle_name"])
+            personal_info["full_name"] = " ".join(full_name_parts)
+        
+        # Ищем ИИН (ЖСН)
+        iin_match = re.search(r"ЖСН:\s*(\d{12})", text)
+        if iin_match:
+            personal_info["iin"] = iin_match.group(1).strip()
+        
+        # Ищем дату рождения
+        dob_match = re.search(r"Туған күні:\s*(\d{2}\.\d{2}\.\d{4})", text)
+        if dob_match:
+            personal_info["birth_date"] = dob_match.group(1).strip()
+        
+        # Ищем адрес
+        address_parts = []
+        address_matches = {
+            "Елі": re.search(r"Елі:\s*([^\r\n]+)", text),
+            "Облыс": re.search(r"Облыс:\s*([^\r\n]+)", text),
+            "Аудан": re.search(r"Аудан:\s*([^\r\n]+)", text),
+            "Қала": re.search(r"Қала:\s*([^\r\n]+)", text),
+            "Көше": re.search(r"Көше:\s*([^\r\n]+)", text)
+        }
+        
+        for key, match in address_matches.items():
+            if match and match.group(1).strip() not in ["Деректер жоқ", "-"]:
+                address_parts.append(match.group(1).strip())
+        
+        if address_parts:
+            personal_info["address"] = ", ".join(address_parts)
+        
+        return personal_info
     def extract_data(self, text: str) -> Dict:
         """Извлекает данные из казахоязычного отчета"""
         logger.info("Обработка казахоязычного отчета")
@@ -749,11 +798,23 @@ class KazakhParser(BaseParser):
                             payment_match = match
                             break
                     
+                    # Ищем сумму просроченных платежей отдельно
+                    overdue_patterns = [
+                        r"Мерзімі өткен жарналар сомасы\s*/валюта:\s*([\d\s.,]+)\s*KZT",
+                        r"Мерзімі өткен жарналар сомасы /валюта:\s*([\d\s.,]+)\s*KZT"
+                    ]
+                    overdue_match = None
+                    for pattern in overdue_patterns:
+                        match = re.search(pattern, block)
+                        if match:
+                            overdue_match = match
+                            break
+                    
                     # Баланс (остаток долга) - проверяем несколько шаблонов
                     balance_patterns = [
                         r"Алдағы төлемдер сомасы\s*/\s*валюта\s*([\d\s.,]+)\s*KZT",
                         r"Шарттың жалпы сомасы\s*/\s*валюта:\s*([\d\s.,]+)\s*KZT",
-                        r"Мерзімі өткен жарналар сомасы\s*/валюта:\s*([\d\s.,]+)\s*KZT"
+                        r"Шарт бойынша берешек қалдығы\s*/\s*валюта:\s*([\d\s.,]+)\s*KZT"
                     ]
                     balance_match = None
                     for pattern in balance_patterns:
@@ -769,27 +830,37 @@ class KazakhParser(BaseParser):
                     creditor = creditor_match.group(1).strip() if creditor_match else "Белгісіз"
                     contract = contract_match.group(1).strip() if contract_match else ""
                     monthly_payment = self.clean_number(payment_match.group(1)) if payment_match else 0.0
+                    overdue_amount = self.clean_number(overdue_match.group(1)) if overdue_match else 0.0
                     balance = self.clean_number(balance_match.group(1)) if balance_match else 0.0
                     status = status_match.group(1).strip() if status_match else "стандартты"
                     overdue_days = int(overdue_days_match.group(1)) if overdue_days_match else 0
                     
-                    # Определяем тип кредитора для оценки
-                    is_bank = any(x in creditor.lower() for x in ["банк", "bank"])
-                    is_mfo = any(x in creditor.lower() for x in ["мфо", "микро", "finance", "кредит"])
+                    # Если баланс нулевой, но есть просроченный платеж, используем его как баланс
+                    if balance == 0.0 and overdue_amount > 0.0:
+                        balance = overdue_amount
+                        logger.info(f"Используем сумму просрочки как баланс: {balance} KZT")
                     
-                    # Если нет информации о балансе, но есть просрочка, оцениваем по типу кредитора
-                    if balance == 0 and overdue_days > 0:
-                        # Упрощенная оценка (можно заменить на результаты из БД)
+                    # Если все еще нет баланса, но есть просрочка, оцениваем по типу кредитора
+                    if balance == 0.0 and overdue_days > 0:
+                        # Определяем тип кредитора для оценки
+                        is_bank = any(x in creditor.lower() for x in ["банк", "bank"])
+                        is_mfo = any(x in creditor.lower() for x in ["мфо", "микро", "finance", "кредит"])
+                        
                         if is_bank:
                             balance = 700000.0  # Средний баланс для банков
                         elif is_mfo:
                             balance = 200000.0  # Средний баланс для МФО
                         else:
                             balance = 250000.0  # Средний баланс для других кредиторов
+                        
+                        logger.info(f"Оценочный баланс по типу кредитора: {balance} KZT")
                     
                     # Если нет информации о ежемесячном платеже, рассчитываем на основе баланса
-                    if monthly_payment == 0.0 and balance > 0:
+                    if monthly_payment == 0.0 and balance > 0.0:
                         # Коэффициент платежа зависит от типа кредитора
+                        is_bank = any(x in creditor.lower() for x in ["банк", "bank"])
+                        is_mfo = any(x in creditor.lower() for x in ["мфо", "микро", "finance", "кредит"])
+                        
                         payment_factor = 0.05  # 5% по умолчанию
                         if is_bank:
                             payment_factor = 0.04  # 4% для банков (более низкие ставки)
@@ -804,13 +875,13 @@ class KazakhParser(BaseParser):
                         "contract": contract,
                         "monthly_payment": monthly_payment,
                         "balance": round(balance, 2),
-                        "overdue_amount": 0.0,
+                        "overdue_amount": round(overdue_amount, 2),
                         "overdue_days": overdue_days,
                         "overdue_status": status
                     }
                     
                     # Добавляем в список обязательств только если баланс > 0 или есть просрочка
-                    if balance > 0 or overdue_days > 0:
+                    if balance > 0.0 or overdue_days > 0:
                         obligations.append(obligation)
                         
                         # Обновляем итоговые суммы
@@ -818,7 +889,7 @@ class KazakhParser(BaseParser):
                         if overdue_days > 0:
                             total_overdue_creditors += 1
                     
-                    logger.info(f"Извлечено обязательство: {creditor}, баланс: {balance}, просрочка: {overdue_days} дней")
+                    logger.info(f"Извлечено обязательство: {creditor}, баланс: {balance}, просрочка: {overdue_amount} KZT / {overdue_days} дней")
                     
                 except Exception as e:
                     logger.error(f"Ошибка при обработке блока обязательства: {e}")
