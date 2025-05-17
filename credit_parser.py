@@ -1044,6 +1044,33 @@ class PKBParser(BaseParser):
             "overdue_obligations": overdue_creditors,
             "obligations": self.convert_to_standard_format(active_credits)
         }
+    
+    def normalize_creditor_name(self, raw_name: str) -> str:
+        """Нормализует название кредитора до стандартной формы"""
+        mapping = {
+            "kaspi": "Kaspi Bank", "forte": "ForteBank", "halyk": "Halyk Bank",
+            "rbk": "RBK", "sber": "Sberbank", "jysan": "Jysan Bank",
+            "altyn": "Altyn Bank", "евраз": "Евразийский Банк",
+            "атф": "АТФ Банк", "asia": "AsiaCredit", "цесна": "Цеснабанк",
+            "capital": "Capital Bank", "home credit": "Home Credit"
+        }
+        for key, std in mapping.items():
+            if key in raw_name.lower():
+                return std
+        return raw_name.strip()
+
+    def filter_duplicate_obligations(self, obligations: list) -> list:
+        """Удаляет дубликаты по нормализованному названию кредитора и номеру контракта"""
+        seen, unique = set(), []
+        for o in obligations:
+            name = self.normalize_creditor_name(o["creditor"])
+            o["creditor"] = name
+            key = f"{name}|{o.get('contract_number', '')}"
+            if key not in seen:
+                seen.add(key)
+                unique.append(o)
+        return unique
+
 
     def extract_active_credits(self, text: str) -> list:
         """
@@ -1208,9 +1235,22 @@ class PKBParser(BaseParser):
                 seen.add(key)
                 unique.append(item)
 
+        # 🟡 ДОПОЛНИТЕЛЬНЫЙ ПОИСК ПЛАВАЮЩИХ КРЕДИТОРОВ, ЕСЛИ ИХ НЕ НАШЛИ
+        BANK_KEYWORDS = [
+            "Forte", "Kaspi", "Halyk", "RBK", "Sberbank", "Jysan", "Altyn",
+            "Home Credit", "Евразийский", "АТФ", "AsiaCredit", "Цеснабанк", "Capital"
+        ]
+        extra_obligations = self.extract_floating_blocks(text, BANK_KEYWORDS)
+        for extra in extra_obligations:
+            key = f"{extra['creditor']}|{extra.get('contract_number', '')}"
+            if key not in seen:
+                seen.add(key)
+                unique.append(extra)
+
         # Сортируем по сумме долга
         final_credits = [c for c in unique if not re.search(r"ломбард", c["creditor"], re.IGNORECASE)]
         final_credits.sort(key=lambda x: -x["total_debt"])
+        final_credits = self.filter_duplicate_obligations(final_credits)
         return final_credits
     
     def convert_to_standard_format(self, active_credits):
@@ -1235,6 +1275,47 @@ class PKBParser(BaseParser):
             obligations.append(obligation)
         
         return obligations
+    
+    def extract_floating_blocks(self, text: str, keywords: list) -> list:
+        """
+        Ищет 'плавающие' блоки по ключевым словам (например, 'ForteBank', 'RBK') и возвращает список обязательств.
+        """
+        obligations = []
+
+        for keyword in keywords:
+            for block in text.split("Займ"):
+                if keyword.lower() in block.lower():
+                    raw_block = "Займ" + block
+
+                    # Ищем все суммы KZT
+                    lines = raw_block.splitlines()
+                    amounts = [line.strip() for line in lines if "KZT" in line]
+
+                    # Ищем дни просрочки
+                    numbers = re.findall(r"\b\d{1,3}\b", raw_block)
+                    overdue_days = int(numbers[3]) if len(numbers) > 3 else 0
+
+                    # Парсим числа
+                    def num(s: str) -> float:
+                        return float(re.sub(r"[^\d,\.]", "", s).replace(",", ".").replace(" ", "")) if s else 0.0
+
+                    obligation = {
+                        "creditor": f"АО «{keyword}»",
+                        "financing_type": "Займ",
+                        "contract_amount": num(amounts[0]) if len(amounts) > 0 else 0.0,
+                        "balance": num(amounts[1]) if len(amounts) > 1 else 0.0,
+                        "overdue_amount": num(amounts[2]) if len(amounts) > 2 else 0.0,
+                        "overdue_days": overdue_days,
+                        "total_debt": num(amounts[1]) if len(amounts) > 1 else 0.0,
+                        "periodic_payment": 0.0,  # при желании можно оценить как 4% от баланса
+                        "status": "просрочка" if overdue_days > 0 else "стандартный кредит",
+                        "is_active": True
+                    }
+
+                    obligations.append(obligation)
+
+        return obligations
+
 
 
 

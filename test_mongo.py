@@ -179,7 +179,7 @@ def extract_active_credits(text: str) -> list:
 # Fetch and run
 client = MongoClient(os.getenv("MONGO_URI"))
 db = client["telegram_bot"]
-doc = db.documents.find_one({"_id": ObjectId("682615d5c5422db27300409d")})
+doc = db.documents.find_one({"_id": ObjectId("68285ab16520c18e1a4a7b28")})
 
 if doc and "text" in doc:
     result = extract_active_credits(doc["text"])
