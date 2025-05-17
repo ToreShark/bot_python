@@ -55,15 +55,16 @@ class BaseParser:
         """Преобразует строковое представление числа в float"""
         return clean_number(value)
     
-    # def extract_personal_info(self, text: str) -> Dict:
+    def extract_personal_info(self, text: str) -> Dict:
         """Извлекает личные данные субъекта кредитного отчета"""
         personal_info = {}
         
         # Поиск ФИО
         name_patterns = [
-            r"(?:ФИО|Получатель|Субъект кредитной истории):\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)",
-            r"Фамилия:\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)[\r\n].*?Имя:\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)[\r\n].*?Отчество:\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)"
+            r"Фамилия:\s*([^\n\r]+)[\r\n]+Имя:\s*([^\n\r]+)[\r\n]+Отчество:\s*([^\n\r]+)",
+            r"(?:ФИО|Получатель|Субъект кредитной истории):\s*([^\n\r]+)"
         ]
+
         
         for pattern in name_patterns:
             match = re.search(pattern, text)
@@ -224,9 +225,10 @@ class BaseParser:
         else:
             # Используем существующую логику из первого парсера для ГКБ
             name_patterns = [
-                r"(?:ФИО|Получатель|Субъект кредитной истории):\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)",
-                r"Фамилия:\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)[\r\n].*?Имя:\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)[\r\n].*?Отчество:\s*([А-Яа-яЁёҚқҒғҢңӘәІіҮүҰұӨөҺһ\s]+)"
+                r"Фамилия:\s*([^\n\r]+)[\r\n]+Имя:\s*([^\n\r]+)[\r\n]+Отчество:\s*([^\n\r]+)",
+                r"(?:ФИО|Получатель|Субъект кредитной истории):\s*([^\n\r]+)"
             ]
+
             
             for pattern in name_patterns:
                 match = re.search(pattern, text)
@@ -692,9 +694,10 @@ class KazakhParser(BaseParser):
         personal_info = {}
         
         # Ищем ФИО в казахском формате
-        last_name_match = re.search(r"Тегі:\s*([А-ЯЁІӘӨҰҚҢҮҺ]+)", text)
-        first_name_match = re.search(r"Аты:\s*([А-ЯЁІӘӨҰҚҢҮҺ]+)", text)
-        middle_name_match = re.search(r"Әкесінің аты:\s*([А-ЯЁІӘӨҰҚҢҮҺ]+)", text)
+        last_name_match = re.search(r"Тегі:\s*([^\n\r]+)", text)
+        first_name_match = re.search(r"Аты:\s*([^\n\r]+)", text)
+        middle_name_match = re.search(r"Әкесінің аты:\s*([^\n\r]+)", text)
+
         
         if last_name_match and first_name_match:
             personal_info["last_name"] = last_name_match.group(1).strip()
