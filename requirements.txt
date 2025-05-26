@@ -13,4 +13,5 @@ pymupdf
 pytesseract
 pdf2image
 pydub
-
+reportlab
+pillow
