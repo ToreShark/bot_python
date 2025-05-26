@@ -307,8 +307,10 @@ def handle_document(message):
         # Обработка чека об оплате (существующая логика)
         handle_payment_receipt(message)
 
+# Добавить в main.py
+
 def handle_credit_report_pdf(message):
-    """Обработка PDF файла кредитного отчета"""
+    """Обработка PDF файла кредитного отчета с генерацией заявлений"""
     user_id = message.from_user.id
     
     try:
@@ -342,23 +344,114 @@ def handle_credit_report_pdf(message):
             text="⏳ Обрабатываю ваш кредитный отчет...\n🔍 Анализирую содержимое..."
         )
         
-        # Используем существующую функцию обработки документов
-        result = process_uploaded_file(file_path, user_id)
+        # ОТЛАДКА: Проверяем импорт
+        print("[DEBUG] Пытаемся импортировать credit_application_generator...")
+        try:
+            from credit_application_generator import process_credit_report_with_applications
+            print("[DEBUG] ✅ Импорт успешен!")
+            
+            # НОВОЕ: Используем функцию с генерацией заявлений
+            result = process_credit_report_with_applications(file_path, user_id)
+            print(f"[DEBUG] Результат: {result.keys() if result else 'None'}")
+            
+        except Exception as import_error:
+            print(f"[ERROR] Ошибка импорта: {import_error}")
+            # Fallback - используем старую функцию
+            result = process_uploaded_file(file_path, user_id)
+            print("[DEBUG] Используем старую функцию без генерации заявлений")
         
         # Создаем кнопки для навигации
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu"))
         markup.add(types.InlineKeyboardButton("📊 Проверить другой отчет", callback_data="check_credit_report"))
         
-        # Отправляем результат
+        # Отправляем результат анализа
         if result and "message" in result:
+            # Обновляем статус для генерации заявлений
             bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=status_msg.message_id,
+                text="⏳ Анализ завершен! Генерирую заявления к кредиторам..."
+            )
+            
+            # Отправляем анализ
+            bot.send_message(
+                chat_id=message.chat.id,
                 text=f"✅ **Анализ завершен**\n\n{result['message']}",
                 reply_markup=markup,
                 parse_mode='Markdown'
             )
+            
+            # ОТЛАДКА: Проверяем наличие заявлений
+            print(f"[DEBUG] Проверяем applications: {result.get('applications', 'НЕТ')}")
+            
+            # НОВОЕ: Отправляем сгенерированные заявления
+            if result.get('applications'):
+                applications = result['applications']
+                print(f"[DEBUG] Найдено {len(applications)} заявлений")
+                
+                # Информируем о количестве заявлений
+                bot.send_message(
+                    chat_id=message.chat.id,
+                    text=f"📄 Генерирую {len(applications)} заявлений к кредиторам..."
+                )
+                
+                # Отправляем каждое заявление как отдельный PDF
+                for i, app in enumerate(applications, 1):
+                    try:
+                        print(f"[DEBUG] Обрабатываем заявление {i}: {app['creditor']}")
+                        
+                        # Создаем временный файл с PDF содержимым
+                        temp_pdf_path = f"temp/application_{i}_{user_id}.pdf"
+                        with open(temp_pdf_path, 'wb') as f:
+                            f.write(app['content'])
+                        
+                        print(f"[DEBUG] PDF файл создан: {temp_pdf_path}")
+                        
+                        # Отправляем PDF файл
+                        with open(temp_pdf_path, 'rb') as pdf_file:
+                            bot.send_document(
+                                chat_id=message.chat.id,
+                                document=pdf_file,
+                                caption=f"📋 Заявление #{i}: {app['creditor']}\n💰 Сумма долга: {app['debt_amount']:,.2f} ₸",
+                                visible_file_name=app['filename']
+                            )
+                        
+                        print(f"[DEBUG] ✅ Заявление {i} отправлено")
+                        
+                        # Удаляем временный файл
+                        try:
+                            os.remove(temp_pdf_path)
+                        except:
+                            pass
+                            
+                    except Exception as e:
+                        print(f"[ERROR] Ошибка отправки заявления {i}: {e}")
+                        bot.send_message(
+                            chat_id=message.chat.id,
+                            text=f"❌ Ошибка при отправке заявления для {app['creditor']}: {str(e)}"
+                        )
+                
+                # Итоговое сообщение
+                bot.send_message(
+                    chat_id=message.chat.id,
+                    text=f"✅ **Готово!**\n\n"
+                         f"📊 Отчет проанализирован\n"
+                         f"📄 Отправлено {len(applications)} заявлений\n\n"
+                         f"💡 **Что делать дальше:**\n"
+                         f"1. Распечатайте заявления\n"  
+                         f"2. Подпишите и поставьте дату\n"
+                         f"3. Отправьте кредиторам по почте\n"
+                         f"4. Приложите копию кредитного отчета",
+                    parse_mode='Markdown'
+                )
+            else:
+                print("[DEBUG] ❌ Applications отсутствуют или пусты")
+                bot.send_message(
+                    chat_id=message.chat.id,
+                    text="⚠️ Не удалось сгенерировать заявления. Проверьте логи сервера."
+                )
+                
         else:
             bot.edit_message_text(
                 chat_id=message.chat.id,
@@ -367,11 +460,17 @@ def handle_credit_report_pdf(message):
                 reply_markup=markup
             )
         
-        # Удаляем временный файл
+        # Удаляем исходный временный файл
         try:
             os.remove(file_path)
         except Exception as e:
             print(f"[WARN] Не удалось удалить файл {file_path}: {e}")
+        
+        # Удаляем сообщение о статусе
+        try:
+            bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+        except:
+            pass
         
         # Сбрасываем состояние пользователя
         user_states.pop(user_id, None)
@@ -381,18 +480,20 @@ def handle_credit_report_pdf(message):
         
     except Exception as e:
         print(f"[ERROR] Ошибка при обработке кредитного отчета: {e}")
+        import traceback
+        traceback.print_exc()
         try:
             bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=status_msg.message_id,
-                text="❌ Произошла ошибка при обработке отчета.\nПопробуйте позже или обратитесь к администратору."
+                text=f"❌ Произошла ошибка: {str(e)}\nПопробуйте позже или обратитесь к администратору."
             )
         except:
             bot.send_message(
                 message.chat.id,
-                "❌ Произошла ошибка при обработке отчета.\nПопробуйте позже или обратитесь к администратору."
+                f"❌ Произошла ошибка: {str(e)}\nПопробуйте позже или обратитесь к администратору."
             )
-
+       
 def handle_payment_receipt(message):
     """Обработка чека об оплате (существующая логика)"""
     user_id = message.from_user.id
