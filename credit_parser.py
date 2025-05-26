@@ -6,12 +6,28 @@ from pymongo import MongoClient
 from datetime import datetime
 from bson import ObjectId
 
+from improved_pkb_parser import FinalPKBParser
+
+# # Настройка логирования
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# )
+# logger = logging.getLogger(__name__)
+
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+DEBUG_MODE = os.getenv('DEBUG', 'False').lower() == 'true'
+
+if DEBUG_MODE:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+else:
+    logging.basicConfig(level=logging.CRITICAL)
+    logger = logging.getLogger(__name__)
+    logger.disabled = True
 
 # Вспомогательная функция для обработки чисел - используется обоими подходами
 def clean_number(value: str) -> float:
@@ -1086,313 +1102,138 @@ class FallbackParser(BaseParser):
     
 # Создаем новый класс для отчетов ПКБ, наследуя от BaseParser
 class PKBParser(BaseParser):
-    """Парсер для отчетов Первого Кредитного Бюро (ПКБ)"""
+    """Точный парсер для отчетов ПКБ"""
     
     def can_parse(self, text: str) -> bool:
-        """Определяет, подходит ли данный текст для парсера ПКБ"""
-        # Проверяем наличие ключевых фраз, характерных для ПКБ
         return ("ПОЛНЫЙ ПЕРСОНАЛЬНЫЙ КРЕДИТНЫЙ ОТЧЕТ" in text or 
                 "ПЕРСОНАЛЬНЫЙ КРЕДИТНЫЙ РЕЙТИНГ" in text or
                 "ДОГОВОРЫ В КРЕДИТНОЙ ИСТОРИИ" in text)
     
     def extract_data(self, text: str) -> Dict:
-        """Извлекает данные из отчета ПКБ"""
-        logger.info("Обработка отчета ПКБ")
-        
-        # Получаем личную информацию
-        personal_info = self.extract_personal_info(text)
-        
-        # Извлекаем активные кредиты используя логику из второго парсера
-        active_credits = self.extract_active_credits(text)
-        
-        # Рассчитываем общие суммы
-        total_debt = sum(credit.get("total_debt", 0) for credit in active_credits)
-        total_monthly_payment = sum(credit.get("periodic_payment", 0) for credit in active_credits)
-        overdue_creditors = sum(1 for credit in active_credits if credit.get("overdue_days", 0) > 0)
-        
-        return {
-            "personal_info": personal_info,
-            "total_debt": round(total_debt, 2),
-            "total_monthly_payment": round(total_monthly_payment, 2),
-            "total_obligations": len(active_credits),
-            "overdue_obligations": overdue_creditors,
-            "obligations": self.convert_to_standard_format(active_credits)
-        }
     
-    def normalize_creditor_name(self, raw_name: str) -> str:
-        """Нормализует название кредитора до стандартной формы"""
-        mapping = {
-            "kaspi": "Kaspi Bank", "forte": "ForteBank", "halyk": "Halyk Bank",
-            "rbk": "RBK", "sber": "Sberbank", "jysan": "Jysan Bank",
-            "altyn": "Altyn Bank", "евраз": "Евразийский Банк",
-            "атф": "АТФ Банк", "asia": "AsiaCredit", "цесна": "Цеснабанк",
-            "capital": "Capital Bank", "home credit": "Home Credit"
-        }
-        for key, std in mapping.items():
-            if key in raw_name.lower():
-                return std
-        return raw_name.strip()
-
-    def filter_duplicate_obligations(self, obligations: list) -> list:
-        """Удаляет дубликаты по нормализованному названию кредитора и номеру контракта"""
-        seen, unique = set(), []
-        for o in obligations:
-            name = self.normalize_creditor_name(o["creditor"])
-            o["creditor"] = name
-            key = f"{name}|{o.get('contract_number', '')}"
-            if key not in seen:
-                seen.add(key)
-                unique.append(o)
-        return unique
-
-
-    def extract_active_credits(self, text: str) -> list:
-        """
-        Извлекает информацию об активных кредитах из отчета ПКБ.
-        Этот метод адаптирован из второго парсера.
-        """
-        active_credits = []
-
-        # Проверяем на казахский или русский язык отчета
-        is_kazakh = "МІНДЕТТЕМЕЛЕР БОЙЫНША ЖАЛПЫ АҚПАРАТ" in text or "ҚОЛДАНЫСТАҒЫ ШАРТТАР" in text
-        is_russian = "ИНФОРМАЦИЯ ПО ДЕЙСТВУЮЩИМ КРЕДИТНЫМ ДОГОВОРАМ" in text or "ДЕЙСТВУЮЩИЕ ДОГОВОРА" in text
-
-        # Обработка казахскоязычного отчета
-        if is_kazakh:
-            # Ищем блоки с обязательствами
-            blocks = list(re.finditer(r"Міндеттеме\s+\d+", text))
-            for i, match in enumerate(blocks):
-                start = match.start()
-                end = blocks[i + 1].start() if i + 1 < len(blocks) else len(text)
-                block = text[start:end]
-
-                # Извлекаем информацию о кредиторе
-                creditor_match = re.search(r"Кредитор:\s*(.*?)[\r\n]", block)
-                if not creditor_match:
-                    continue
-                creditor = creditor_match.group(1).strip()
-                
-                # Пропускаем ломбарды
-                if re.search(r"ломбард", creditor, re.IGNORECASE):
-                    continue
-
-                # Извлекаем информацию о просрочке
-                overdue_match = re.search(r"Мерзімі өткен жарналар сомасы\s*\/валюта:\s*([\d\s.,]+)\s*KZT", block)
-                overdue = self.clean_number(overdue_match.group(1)) if overdue_match else 0
-
-                # Извлекаем баланс
-                balance_match = re.search(r"(?:Шарт бойынша берешек қалдығы|Алдағы төлемдер сомасы)(?:\/валюта)?[:]\s*([\d\s.,]+)\s*KZT", block)
-                balance = self.clean_number(balance_match.group(1)) if balance_match else overdue
-
-                # Извлекаем дни просрочки
-                days_match = re.search(r"Мерзімі өткен күндер саны:\s*(\d+)", block)
-                overdue_days = int(days_match.group(1)) if days_match else 0
-
-                # Извлекаем ежемесячный платеж
-                monthly_match = re.search(r"Ай сайынғы төлем сомасы\s*\/\s*валюта:\s*([\d\s.,]+)\s*KZT", block)
-                monthly = self.clean_number(monthly_match.group(1)) if monthly_match else 0
-
-                # Извлекаем статус кредита
-                status_match = re.search(r"Шарттың мәртебесі:\s*(.*?)[\r\n]", block)
-                status = status_match.group(1).strip() if status_match else ""
-
-                # Номер контракта
-                number_match = re.search(r"(?:Шарт нөмірі|Келісімшарт коды):\s*(.*?)[\r\n]", block)
-                contract_number = number_match.group(1).strip() if number_match else ""
-
-                # Тип финансирования
-                financing_match = re.search(r"Қаржыландыру түрі:\s*(.*?)[\r\n]", block)
-                financing_type = financing_match.group(1).strip() if financing_match else ""
-
-                # Добавляем кредит, если есть значимые данные
-                if any([balance, overdue, overdue_days, monthly]):
-                    active_credits.append({
-                        "creditor": creditor,
-                        "total_debt": balance if balance else overdue,
-                        "overdue_amount": overdue,
-                        "overdue_days": overdue_days,
-                        "periodic_payment": monthly if monthly else (balance * 0.05),
-                        "contract_number": contract_number,
-                        "status": status,
-                        "financing_type": financing_type,
-                        "is_active": True
-                    })
-
-        # Обработка русскоязычного отчета
-        if is_russian:
-            # Поиск таблицы с кредитами
-            match = re.search(r"ИНФОРМАЦИЯ ПО ДЕЙСТВУЮЩИМ КРЕДИТНЫМ ДОГОВОРАМ[\s\S]+?Итого:", text)
-            if match:
-                table_text = match.group()
-                lines = table_text.split("\n")[1:-1]
-                for line in lines:
-                    if not line.strip() or "Вид" in line:
-                        continue
-                        
-                    # Разделяем строку по пробелам
-                    parts = re.split(r"\s{2,}", line.strip())
-                    if len(parts) >= 8:
-                        try:
-                            financing_type, creditor = parts[0], parts[1]
-                            if re.search(r"ломбард", creditor, re.IGNORECASE):
-                                continue
-                                
-                            # Извлекаем числовые значения
-                            amounts = [self.clean_number(a) for a in re.findall(r"(\d[\d\s.,]+)\s*KZT", line)]
-                            
-                            # Извлекаем дни просрочки
-                            overdue_days = int(re.findall(r"(\d+)(?:\s*-)?$", line)[0]) if re.findall(r"(\d+)(?:\s*-)?$", line) else 0
-                            
-                            if len(amounts) >= 4:
-                                contract_amount, periodic_payment, balance, overdue_amount = amounts[:4]
-                                if any([balance, overdue_amount, overdue_days, periodic_payment]):
-                                    active_credits.append({
-                                        "creditor": creditor,
-                                        "financing_type": financing_type,
-                                        "total_debt": balance if balance else overdue_amount,
-                                        "periodic_payment": periodic_payment,
-                                        "overdue_amount": overdue_amount,
-                                        "overdue_days": overdue_days,
-                                        "status": "Просрочка" if overdue_days > 0 else "Стандартный кредит",
-                                        "is_active": True
-                                    })
-                        except Exception as e:
-                            logger.error(f"Ошибка при обработке строки: {e}")
-                            continue
-
-            # Поиск информации о контрактах
-            contract_block_match = re.search(r"ДЕЙСТВУЮЩИЕ ДОГОВОРА[\s\S]+?(?=ЗАВЕРШЕННЫЕ ДОГОВОРЫ|$)", text, re.IGNORECASE)
-            if contract_block_match:
-                for contract in re.finditer(r"КОНТРАКТ\s+\d+[\s\S]+?(?=КОНТРАКТ\s+\d+|ЗАВЕРШЕННЫЕ ДОГОВОРЫ|$)", contract_block_match.group(), re.IGNORECASE):
-                    block = contract.group()
-                    
-                    # Извлекаем информацию о кредиторе
-                    creditor_match = re.search(r"Источник информации \(Кредитор\):\s*([^\n]+)", block)
-                    if not creditor_match:
-                        continue
-                        
-                    creditor = creditor_match.group(1).strip()
-                    if re.search(r"ломбард", creditor, re.IGNORECASE):
-                        continue
-
-                    # Извлекаем остальную информацию
-                    debt = self.clean_number(re.search(r"(?:Непогашенная сумма по кредиту|Использованная сумма \(подлежащая погашению\)):\s*([\d\s.,]+)\s*KZT", block).group(1)) if re.search(r"(?:Непогашенная сумма по кредиту|Использованная сумма \(подлежащая погашению\)):\s*([\d\s.,]+)\s*KZT", block) else 0
-                    overdue = self.clean_number(re.search(r"Сумма просроченных взносов:\s*([\d\s.,]+)\s*KZT", block).group(1)) if re.search(r"Сумма просроченных взносов:\s*([\d\s.,]+)\s*KZT", block) else 0
-                    overdue_days = int(re.search(r"Количество дней просрочки:\s*(\d+)", block).group(1)) if re.search(r"Количество дней просрочки:\s*(\d+)", block) else 0
-                    payment = self.clean_number(re.search(r"(?:Сумма периодического платежа|Минимальный платеж):\s*([\d\s.,]+)\s*KZT", block).group(1)) if re.search(r"(?:Сумма периодического платежа|Минимальный платеж):\s*([\d\s.,]+)\s*KZT", block) else 0
-                    
-                    # Статус контракта
-                    status = re.search(r"Статус договора:\s*([^\n]+)", block)
-                    contract_number = re.search(r"Номер договора:\s*([^\n]+)", block)
-                    financing_type = re.search(r"Вид финансирования:\s*([^\n]+)", block)
-
-                    # Добавляем, если есть значимые данные
-                    if any([debt, overdue, overdue_days, payment]):
-                        active_credits.append({
-                            "creditor": creditor,
-                            "total_debt": debt if debt else overdue,
-                            "overdue_amount": overdue,
-                            "overdue_days": overdue_days,
-                            "periodic_payment": payment if payment else ((debt if debt else overdue) * 0.05),
-                            "contract_number": contract_number.group(1).strip() if contract_number else "",
-                            "status": status.group(1).strip() if status else "",
-                            "financing_type": financing_type.group(1).strip() if financing_type else "",
-                            "is_active": True
-                        })
-
-        # Удаляем дубликаты, используя кредитора и номер контракта как ключ
-        seen = set()
-        unique = []
-        for item in active_credits:
-            key = f"{item['creditor']}|{item.get('contract_number', '')}"
-            if key not in seen:
-                seen.add(key)
-                unique.append(item)
-
-        # 🟡 ДОПОЛНИТЕЛЬНЫЙ ПОИСК ПЛАВАЮЩИХ КРЕДИТОРОВ, ЕСЛИ ИХ НЕ НАШЛИ
-        BANK_KEYWORDS = [
-            "Forte", "Kaspi", "Halyk", "RBK", "Sberbank", "Jysan", "Altyn",
-            "Home Credit", "Евразийский", "АТФ", "AsiaCredit", "Цеснабанк", "Capital"
-        ]
-        extra_obligations = self.extract_floating_blocks(text, BANK_KEYWORDS)
-        for extra in extra_obligations:
-            key = f"{extra['creditor']}|{extra.get('contract_number', '')}"
-            if key not in seen:
-                seen.add(key)
-                unique.append(extra)
-
-        # Сортируем по сумме долга
-        final_credits = [c for c in unique if not re.search(r"ломбард", c["creditor"], re.IGNORECASE)]
-        final_credits.sort(key=lambda x: -x["total_debt"])
-        final_credits = self.filter_duplicate_obligations(final_credits)
-        return final_credits
+        improved_parser = FinalPKBParser()
+        return improved_parser.parse(text)
     
-    def convert_to_standard_format(self, active_credits):
-        """
-        Преобразует активные кредиты из формата ПКБ в стандартный формат для системы.
-        """
+    def extract_from_precise_table(self, text: str) -> list:
+        """Точное извлечение из таблицы с учетом реальной структуры"""
         obligations = []
-        for credit in active_credits:
+        
+        # Ищем таблицу с действующими договорами
+        table_start = text.find("ИНФОРМАЦИЯ ПО ДЕЙСТВУЮЩИМ КРЕДИТНЫМ ДОГОВОРАМ")
+        if table_start == -1:
+            logger.info("Таблица не найдена")
+            return obligations
+        
+        table_end = text.find("Итого:", table_start)
+        if table_end == -1:
+            logger.info("Конец таблицы не найден")
+            return obligations
+        
+        table_section = text[table_start:table_end]
+        
+        # Разбиваем на строки и ищем строки с данными
+        lines = table_section.split('\n')
+        data_lines = []
+        
+        for line in lines:
+            # Строка с данными должна содержать KZT и не быть заголовком
+            if ("KZT" in line and 
+                "Вид" not in line and 
+                "Кредитор" not in line and 
+                "Роль" not in line and
+                line.strip()):
+                data_lines.append(line.strip())
+        
+        logger.info(f"Найдено {len(data_lines)} строк данных в таблице")
+        
+        for line_num, line in enumerate(data_lines, 1):
+            obligation = self.parse_precise_table_line(line, line_num)
+            if obligation:
+                obligations.append(obligation)
+        
+        return obligations
+    
+    def parse_precise_table_line(self, line: str, line_num: int) -> Optional[Dict]:
+        """Точно парсит строку таблицы"""
+        try:
+            logger.info(f"Парсинг строки {line_num}: {line[:100]}...")
+            
+            # Сначала извлекаем все суммы KZT по порядку
+            kzt_amounts = re.findall(r"([\d\s,\.]+)\s*KZT", line)
+            if len(kzt_amounts) < 4:
+                logger.warning(f"Недостаточно сумм в строке {line_num}: {len(kzt_amounts)}")
+                return None
+            
+            # Структура таблицы: Тип | Кредитор | Роль | Дата | Сумма_договора | Периодич_платеж | Непогаш_сумма | Сумма_просрочки | Дни | Штрафы | Пеня | Дата
+            contract_amount = self.clean_number(kzt_amounts[0])
+            periodic_payment = self.clean_number(kzt_amounts[1])  
+            balance = self.clean_number(kzt_amounts[2])
+            overdue_amount = self.clean_number(kzt_amounts[3])
+            
+            # Извлекаем кредитора - находим между "Заёмщик" и датой или между типом финансирования и "Заёмщик"
+            # Удаляем известные части для облегчения поиска
+            clean_line = line
+            
+            # Удаляем тип финансирования в начале
+            clean_line = re.sub(r'^(Займ|Кредитная карта)\s+', '', clean_line)
+            
+            # Находим кредитора до "Заёмщик"
+            creditor_match = re.search(r'^(.*?)\s+Заёмщик', clean_line)
+            if not creditor_match:
+                logger.warning(f"Не найден кредитор в строке {line_num}")
+                return None
+            
+            creditor = creditor_match.group(1).strip()
+            
+            # Очищаем название кредитора от лишних пробелов
+            creditor = re.sub(r'\s+', ' ', creditor).strip()
+            
+            # Извлекаем дни просрочки - ищем число перед KZT или в конце строки
+            overdue_days = 0
+            
+            # Ищем дни просрочки как отдельное число после всех KZT
+            remaining_line = line
+            for kzt_amount in kzt_amounts:
+                remaining_line = remaining_line.replace(f"{kzt_amount} KZT", "", 1)
+            
+            # Ищем числа в оставшейся части
+            remaining_numbers = re.findall(r'\b(\d{1,4})\b', remaining_line)
+            if remaining_numbers:
+                # Берем наибольшее число как дни просрочки (обычно это самое большое число)
+                overdue_days = max(int(num) for num in remaining_numbers[-3:])  # Последние 3 числа
+            
+            # Определяем основную сумму долга
+            debt_amount = max(balance, overdue_amount)
+            
+            # Если ежемесячный платеж нулевой, оцениваем его
+            if periodic_payment == 0 and debt_amount > 0:
+                periodic_payment = debt_amount * 0.05  # 5% от долга
+            
+            # Валидация - принимаем любые договоры с ненулевой суммой
+            if debt_amount <= 0 and contract_amount <= 0:
+                logger.warning(f"Нулевые суммы в строке {line_num}")
+                return None
+            
+            # Если основной долг нулевой, но есть сумма договора - используем её
+            if debt_amount == 0 and contract_amount > 0:
+                debt_amount = contract_amount
+            
             obligation = {
-                "creditor": credit["creditor"],
-                "monthly_payment": credit.get("periodic_payment", 0),
-                "balance": round(credit.get("total_debt", 0), 2),
-                "overdue_amount": round(credit.get("overdue_amount", 0), 2),
-                "overdue_days": credit.get("overdue_days", 0),
-                "overdue_status": credit.get("status", "нет данных")
+                "creditor": creditor,
+                "monthly_payment": round(periodic_payment, 2),
+                "balance": round(debt_amount, 2),
+                "overdue_amount": round(overdue_amount, 2),
+                "overdue_days": overdue_days,
+                "overdue_status": "просрочка" if overdue_days > 0 else "нет просрочки"
             }
             
-            # Добавляем контракт, если он есть
-            if "contract_number" in credit:
-                obligation["contract"] = credit["contract_number"]
-                
-            obligations.append(obligation)
+            logger.info(f"Успешно извлечено: {creditor}, долг: {debt_amount}, просрочка: {overdue_days} дней")
+            return obligation
+            
+        except Exception as e:
+            logger.error(f"Ошибка при парсинге строки {line_num}: {e}")
+            return None
         
-        return obligations
-    
-    def extract_floating_blocks(self, text: str, keywords: list) -> list:
-        """
-        Ищет 'плавающие' блоки по ключевым словам (например, 'ForteBank', 'RBK') и возвращает список обязательств.
-        """
-        obligations = []
-
-        for keyword in keywords:
-            for block in text.split("Займ"):
-                if keyword.lower() in block.lower():
-                    raw_block = "Займ" + block
-
-                    # Ищем все суммы KZT
-                    lines = raw_block.splitlines()
-                    amounts = [line.strip() for line in lines if "KZT" in line]
-
-                    # Ищем дни просрочки
-                    numbers = re.findall(r"\b\d{1,3}\b", raw_block)
-                    overdue_days = int(numbers[3]) if len(numbers) > 3 else 0
-
-                    # Парсим числа
-                    def num(s: str) -> float:
-                        return float(re.sub(r"[^\d,\.]", "", s).replace(",", ".").replace(" ", "")) if s else 0.0
-
-                    obligation = {
-                        "creditor": f"АО «{keyword}»",
-                        "financing_type": "Займ",
-                        "contract_amount": num(amounts[0]) if len(amounts) > 0 else 0.0,
-                        "balance": num(amounts[1]) if len(amounts) > 1 else 0.0,
-                        "overdue_amount": num(amounts[2]) if len(amounts) > 2 else 0.0,
-                        "overdue_days": overdue_days,
-                        "total_debt": num(amounts[1]) if len(amounts) > 1 else 0.0,
-                        "periodic_payment": 0.0,  # при желании можно оценить как 4% от баланса
-                        "status": "просрочка" if overdue_days > 0 else "стандартный кредит",
-                        "is_active": True
-                    }
-
-                    obligations.append(obligation)
-
-        return obligations
-
-
-
-
 def create_parser_chain():
     """Создает цепочку парсеров"""
     pkb = PKBParser()  # Новый парсер для ПКБ
@@ -1496,6 +1337,11 @@ def extract_credit_data(data, is_mongodb_id=False):
 # Обновленная функция форматирования результатов с учетом языка и личных данных
 def format_summary(data: Dict) -> str:
     """Форматирует данные в читаемый вид"""
+
+    # Если это результат от улучшенного PKB парсера
+    if data.get("totals") and data.get("contract_summary"):
+        from improved_pkb_parser import format_pkb_summary
+        return format_pkb_summary(data)
     
     # Проверка на ошибку парсинга
     if data.get("parsing_error", False):

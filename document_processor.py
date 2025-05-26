@@ -12,31 +12,33 @@ load_dotenv()  # Подгружаем .env переменные
 
 # Определяем режим
 env = os.getenv("ENV", "prod").lower()
+DEBUG_MODE = env == "dev"
 
 # Подключение к MongoDB
 client = MongoClient(os.getenv("MONGO_URI"))
-
-# Используем базу в зависимости от режима
-db_name = "tg_bot_dev" if env == "dev" else "telegram_bot"
+db_name = "tg_bot_dev" if DEBUG_MODE else "telegram_bot"
 db = client[db_name]
-
 docs_collection = db['documents']
 
-# Подключение к MongoDB
-client = MongoClient(os.getenv("MONGO_URI"))
-db = client['telegram_bot']
-docs_collection = db['documents']
 
 def process_uploaded_file(filepath, user_id):
     # 1. Пытаемся извлечь текст напрямую
     text = extract_text_from_pdf(filepath)
     # print(f"[DEBUG] Direct PDF text length: {len(text)}")
 
+     # 🔍 Сохраняем извлечённый текст для отладки
+    with open("debug_text_output.txt", "w", encoding="utf-8") as f:
+        f.write(text)
+
     # 2. Если текста нет — OCR
     if not text.strip():
         # print("[INFO] PDF не содержит текста. Запускаем OCR...")
         text = ocr_file(filepath)
         # print(f"[DEBUG] OCR text length: {len(text)}")
+
+         # 🔍 Сохраняем текст после OCR тоже
+        with open("debug_text_output_ocr.txt", "w", encoding="utf-8") as f:
+            f.write(text)
 
     # 3. Определяем тип документа
     doc_type = detect_document_type(text)
@@ -52,6 +54,7 @@ def process_uploaded_file(filepath, user_id):
 
      # Распознаём кредитный отчёт
     if doc_type == "credit_report":
+        # print(f"[DEBUG] Начинаем парсинг, длина текста: {len(text)}")
         parsed = extract_credit_data_with_total(text)
         # print(f"[DEBUG] Результат парсинга: {parsed}")
 
