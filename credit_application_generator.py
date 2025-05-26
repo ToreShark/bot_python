@@ -28,17 +28,17 @@ def register_fonts():
         for font_path in font_paths:
             if os.path.exists(font_path):
                 pdfmetrics.registerFont(TTFont('RussianFont', font_path))
-                print(f"[INFO] Зарегистрирован шрифт: {font_path}")
+                # print(f"[INFO] Зарегистрирован шрифт: {font_path}")
                 return 'RussianFont'
         
         # Если не нашли файл шрифта, пробуем встроенные шрифты ReportLab
         from reportlab.lib.fonts import addMapping
         addMapping('RussianFont', 0, 0, 'Times-Roman')
-        print("[INFO] Используем встроенный шрифт Times-Roman")
+        # print("[INFO] Используем встроенный шрифт Times-Roman")
         return 'Times-Roman'
         
     except Exception as e:
-        print(f"[WARN] Ошибка регистрации шрифта: {e}")
+        # print(f"[WARN] Ошибка регистрации шрифта: {e}")
         return 'Times-Roman'  # Fallback
 
 def generate_credit_application_pdf(personal_info, creditor_data, total_debt):
@@ -194,11 +194,11 @@ def generate_credit_application_pdf(personal_info, creditor_data, total_debt):
         with open(temp_file.name, 'rb') as f:
             pdf_content = f.read()
         
-        print(f"[DEBUG] PDF создан успешно для {creditor_data['creditor']}")
+        # print(f"[DEBUG] PDF создан успешно для {creditor_data['creditor']}")
         return pdf_content
         
     except Exception as e:
-        print(f"[ERROR] Ошибка создания PDF: {e}")
+        # print(f"[ERROR] Ошибка создания PDF: {e}")
         return None
         
     finally:
@@ -225,11 +225,11 @@ def generate_applications_for_all_creditors(parsed_data):
     
     generated_files = []
     
-    print(f"[DEBUG] Генерируем заявления для {len(obligations)} кредиторов")
+    # print(f"[DEBUG] Генерируем заявления для {len(obligations)} кредиторов")
     
     for i, obligation in enumerate(obligations, 1):
         try:
-            print(f"[DEBUG] Обрабатываем кредитора {i}: {obligation['creditor']}")
+            # print(f"[DEBUG] Обрабатываем кредитора {i}: {obligation['creditor']}")
             
             # Генерируем PDF для каждого кредитора
             pdf_content = generate_credit_application_pdf(
@@ -239,7 +239,7 @@ def generate_applications_for_all_creditors(parsed_data):
             )
             
             if pdf_content is None:
-                print(f"[ERROR] Не удалось создать PDF для {obligation['creditor']}")
+                # print(f"[ERROR] Не удалось создать PDF для {obligation['creditor']}")
                 continue
             
             # Создаем безопасное имя файла
@@ -254,13 +254,13 @@ def generate_applications_for_all_creditors(parsed_data):
                 'debt_amount': obligation.get('balance', 0)
             })
             
-            print(f"[DEBUG] ✅ Заявление для {creditor_name} создано успешно")
+            # print(f"[DEBUG] ✅ Заявление для {creditor_name} создано успешно")
             
         except Exception as e:
-            print(f"[ERROR] Ошибка при создании заявления для {obligation.get('creditor', 'неизвестно')}: {e}")
+            # print(f"[ERROR] Ошибка при создании заявления для {obligation.get('creditor', 'неизвестно')}: {e}")
             continue
     
-    print(f"[DEBUG] Итого создано {len(generated_files)} заявлений")
+    # print(f"[DEBUG] Итого создано {len(generated_files)} заявлений")
     return generated_files
 
 # Функция для интеграции в document_processor.py

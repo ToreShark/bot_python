@@ -1,10 +1,21 @@
 import re
 import logging
+import os
 from typing import Dict, List, Optional
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+DEBUG_MODE = os.getenv('DEBUG', 'False').lower() == 'true'
+
+if DEBUG_MODE:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+else:
+    logging.basicConfig(level=logging.CRITICAL)
+    logger = logging.getLogger(__name__)
+    logger.disabled = True
 
 def clean_number(value: str) -> float:
     """Преобразует строковое представление числа в float"""

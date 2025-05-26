@@ -345,20 +345,20 @@ def handle_credit_report_pdf(message):
         )
         
         # ОТЛАДКА: Проверяем импорт
-        print("[DEBUG] Пытаемся импортировать credit_application_generator...")
+        # print("[DEBUG] Пытаемся импортировать credit_application_generator...")
         try:
             from credit_application_generator import process_credit_report_with_applications
-            print("[DEBUG] ✅ Импорт успешен!")
+            # print("[DEBUG] ✅ Импорт успешен!")
             
             # НОВОЕ: Используем функцию с генерацией заявлений
             result = process_credit_report_with_applications(file_path, user_id)
-            print(f"[DEBUG] Результат: {result.keys() if result else 'None'}")
+            # print(f"[DEBUG] Результат: {result.keys() if result else 'None'}")
             
         except Exception as import_error:
-            print(f"[ERROR] Ошибка импорта: {import_error}")
+            # print(f"[ERROR] Ошибка импорта: {import_error}")
             # Fallback - используем старую функцию
             result = process_uploaded_file(file_path, user_id)
-            print("[DEBUG] Используем старую функцию без генерации заявлений")
+            # print("[DEBUG] Используем старую функцию без генерации заявлений")
         
         # Создаем кнопки для навигации
         markup = types.InlineKeyboardMarkup()
@@ -383,12 +383,12 @@ def handle_credit_report_pdf(message):
             )
             
             # ОТЛАДКА: Проверяем наличие заявлений
-            print(f"[DEBUG] Проверяем applications: {result.get('applications', 'НЕТ')}")
+            # print(f"[DEBUG] Проверяем applications: {result.get('applications', 'НЕТ')}")
             
             # НОВОЕ: Отправляем сгенерированные заявления
             if result.get('applications'):
                 applications = result['applications']
-                print(f"[DEBUG] Найдено {len(applications)} заявлений")
+                # print(f"[DEBUG] Найдено {len(applications)} заявлений")
                 
                 # Информируем о количестве заявлений
                 bot.send_message(
@@ -399,14 +399,14 @@ def handle_credit_report_pdf(message):
                 # Отправляем каждое заявление как отдельный PDF
                 for i, app in enumerate(applications, 1):
                     try:
-                        print(f"[DEBUG] Обрабатываем заявление {i}: {app['creditor']}")
+                        # print(f"[DEBUG] Обрабатываем заявление {i}: {app['creditor']}")
                         
                         # Создаем временный файл с PDF содержимым
                         temp_pdf_path = f"temp/application_{i}_{user_id}.pdf"
                         with open(temp_pdf_path, 'wb') as f:
                             f.write(app['content'])
                         
-                        print(f"[DEBUG] PDF файл создан: {temp_pdf_path}")
+                        # print(f"[DEBUG] PDF файл создан: {temp_pdf_path}")
                         
                         # Отправляем PDF файл
                         with open(temp_pdf_path, 'rb') as pdf_file:
@@ -417,7 +417,7 @@ def handle_credit_report_pdf(message):
                                 visible_file_name=app['filename']
                             )
                         
-                        print(f"[DEBUG] ✅ Заявление {i} отправлено")
+                        # print(f"[DEBUG] ✅ Заявление {i} отправлено")
                         
                         # Удаляем временный файл
                         try:
@@ -476,7 +476,7 @@ def handle_credit_report_pdf(message):
         user_states.pop(user_id, None)
         
         # Логируем успешную обработку
-        print(f"[INFO] Успешно обработан кредитный отчет пользователя {user_id}")
+        # print(f"[INFO] Успешно обработан кредитный отчет пользователя {user_id}")
         
     except Exception as e:
         print(f"[ERROR] Ошибка при обработке кредитного отчета: {e}")
