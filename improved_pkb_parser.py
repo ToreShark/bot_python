@@ -3,6 +3,9 @@ import logging
 import os
 from typing import Dict, List, Optional
 
+from collateral_parser import extract_collateral_info
+
+
 # Настройка логирования
 DEBUG_MODE = os.getenv('DEBUG', 'False').lower() == 'true'
 
@@ -536,6 +539,9 @@ class FinalPKBParser:
             }
             
             self.logger.info(f"ИСПРАВЛЕННЫЙ парсинг: Общий долг = {total_debt} ₸, найдено {len(obligations)} групп кредиторов")
+            # Извлекаем залоги
+            collaterals = extract_collateral_info(text)
+            result["collaterals"] = collaterals
             return result
             
         except Exception as e:
@@ -613,7 +619,17 @@ def format_pkb_summary(data: Dict) -> str:
             obligations_text += (
                 f"{i}. {obligation['creditor']}{contracts_info}: {obligation['balance']:,.2f} ₸{overdue_info}{last_payment_info}\n"
             )
-    
+    # Информация о залогах
+    collaterals = data.get("collaterals", [])
+    if collaterals:
+        collateral_text = "\n🏠 Информация по залогам:"
+        for c in collaterals:
+            creditor = c.get("creditor", "Неизвестно")
+            kind = c.get("collateral_type", "Неизвестно")
+            value = c.get("market_value", 0.0)
+            collateral_text += f"\n— {creditor}: {kind} ({value:,.2f} ₸)"
+        obligations_text += "\n" + collateral_text
+
     return personal_text + main_info + obligations_text
 
 # Функция для интеграции в существующую систему

@@ -6,6 +6,7 @@ from pymongo import MongoClient
 from datetime import datetime
 from bson import ObjectId
 
+from collateral_parser import extract_collateral_info
 from improved_pkb_parser import FinalPKBParser
 
 # # Настройка логирования
@@ -1263,7 +1264,9 @@ def extract_credit_data_with_total(text: str) -> Dict:
             "obligations": [],
             "parsing_error": True
         }
-    
+    # Добавляем извлечённые залоги
+    result["collaterals"] = extract_collateral_info(text)
+
     return result
 
 # Новая функция: Парсинг отчета напрямую из MongoDB
@@ -1433,7 +1436,16 @@ def format_summary(data: Dict) -> str:
         # Добавляем информацию о количестве неактивных обязательств
         if inactive_count > 0:
             creditors_info += f"\n\n{h['inactive'].format(inactive_count)}"
-    
+    # 🔒 Добавляем информацию о залогах
+    collaterals_info = ""
+    collaterals = data.get("collaterals", [])
+    if collaterals:
+        collaterals_info = "\n\n🔒 Обеспечение (залог):"
+        for i, c in enumerate(collaterals, 1):
+            collaterals_info += (
+                f"\n{i}. Кредитор: {c['creditor']}, Тип: {c['collateral_type']}, "
+                f"Стоимость: {c['market_value']:,.2f} ₸"
+            )
     return (
         f"{personal_info_text}\n"
         f"{h['report_header']}\n"
@@ -1442,8 +1454,10 @@ def format_summary(data: Dict) -> str:
         f"{h['total_debt']} {data['total_debt']:,.2f} ₸\n"
         f"{h['monthly_payment']} {data['total_monthly_payment']:,.2f} ₸"
         f"{creditors_info}"
+        f"{collaterals_info}"
         f"{quality_note}"
     )
+
 
 # Пример использования MongoDB парсера
 def process_credit_report_from_mongodb(report_id):
