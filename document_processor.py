@@ -15,8 +15,15 @@ env = os.getenv("ENV", "prod").lower()
 DEBUG_MODE = env == "dev"
 
 # Подключение к MongoDB
-client = MongoClient(os.getenv("MONGO_URI"))
-db_name = "tg_bot_dev" if DEBUG_MODE else "telegram_bot"
+# Подключение к MongoDB
+if DEBUG_MODE:
+    client = MongoClient("mongodb://localhost:27017")
+    print(f"[DEBUG] Подключение к локальной MongoDB (режим {env})")
+else:
+    client = MongoClient(os.getenv("MONGO_URI"))
+    print(f"[DEBUG] Подключение к MongoDB Atlas (режим {env})")
+# db_name = "tg_bot_dev" if DEBUG_MODE else "telegram_bot"
+db_name = "telegram_bot"
 db = client[db_name]
 docs_collection = db['documents']
 
