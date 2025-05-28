@@ -2,6 +2,7 @@ import telebot
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from bankruptcy_calculator import analyze_credit_report_for_bankruptcy
 from legal_engine import query
 from datetime import datetime, timezone, timedelta
 from telebot import types
@@ -30,6 +31,57 @@ users_collection = db['users']
 # Простая антивандальная структура: последний доступ
 user_last_access = {}
 user_states = {}  # Для отслеживания состояний пользователей
+def send_long_message(bot, chat_id, text, reply_markup=None, parse_mode=None):
+    """Отправляет длинные сообщения по частям"""
+    
+    MAX_LENGTH = 4000  # Максимум символов в одном сообщении
+    
+    # Если сообщение короткое - отправляем как обычно
+    if len(text) <= MAX_LENGTH:
+        bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+        return
+    
+    # Если длинное - разбиваем на части
+    parts = []
+    lines = text.split('\n')  # Разбиваем по строкам
+    current_part = ""
+    
+    for line in lines:
+        # Проверяем, поместится ли строка
+        if len(current_part + line) <= MAX_LENGTH:
+            if current_part:
+                current_part += '\n'
+            current_part += line
+        else:
+            # Сохраняем текущую часть и начинаем новую
+            if current_part:
+                parts.append(current_part)
+            current_part = line
+    
+    # Добавляем последнюю часть
+    if current_part:
+        parts.append(current_part)
+    
+    # Отправляем все части по очереди
+    for i, part in enumerate(parts):
+        # Кнопки добавляем только к последнему сообщению
+        markup = reply_markup if i == len(parts) - 1 else None
+        
+        bot.send_message(
+            chat_id=chat_id,
+            text=part,
+            reply_markup=markup,
+            parse_mode=parse_mode
+        )
+        
+        # Небольшая пауза между сообщениями
+        import time
+        time.sleep(0.3)
 
 @bot.message_handler(commands=['start'])
 def main(message):
@@ -49,29 +101,9 @@ def main(message):
             "message_limit": 0,
             "messages": []
         })
+    # 🛠 Заменили ручную разметку на универсальную
+    markup = create_main_menu()
     
-    # Главное меню с современным дизайном
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    
-    # Кнопки услуг
-    lawyer_btn = types.InlineKeyboardButton(
-        "⚖️ Консультация юриста (платно) 💰", 
-        callback_data="lawyer_consultation"
-    )
-    credit_btn = types.InlineKeyboardButton(
-        "📊 Проверить кредитный отчет (бесплатно) 🆓", 
-        callback_data="check_credit_report"
-    )
-    
-    # Информационные кнопки
-    info_btn = types.InlineKeyboardButton(
-        "ℹ️ О боте", 
-        callback_data="bot_info"
-    )
-    
-    markup.add(lawyer_btn, credit_btn, info_btn)
-    
-    # Приветственное сообщение
     welcome_text = (
         f"👋 Добро пожаловать, {first_name}!\n\n"
         "🤖 Я ваш персональный юридический ассистент.\n"
@@ -108,6 +140,8 @@ def handle_callback_query(call):
         handle_lawyer_consultation(call)
     elif call.data == "check_credit_report":
         handle_credit_report_request(call)
+    elif call.data == "bankruptcy_calculator":
+        handle_bankruptcy_calculator(call)
     elif call.data == "bot_info":
         handle_bot_info(call)
     elif call.data.startswith("pay_"):
@@ -136,12 +170,16 @@ def create_main_menu():
         "📊 Проверить кредитный отчет (бесплатно) 🆓", 
         callback_data="check_credit_report"
     )
+    bankruptcy_btn = types.InlineKeyboardButton(
+        "🧮 Банкротный калькулятор", 
+        callback_data="bankruptcy_calculator"
+    )
     info_btn = types.InlineKeyboardButton(
         "ℹ️ О боте", 
         callback_data="bot_info"
     )
     
-    markup.add(lawyer_btn, credit_btn, info_btn)
+    markup.add(lawyer_btn, credit_btn, bankruptcy_btn, info_btn)
     return markup
 
 def handle_lawyer_consultation(call):
@@ -294,14 +332,15 @@ def handle_payment_callback(call):
 
 # Используем существующую функцию из document_processor
 
+# Также нужно обновить функцию handle_document для поддержки банкротного режима:
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     """Обработка документов (PDF для кредитных отчетов и чеки об оплате)"""
     user_id = message.from_user.id
     current_state = user_states.get(user_id)
     
-    if current_state == "waiting_credit_report":
-        # Обработка кредитного отчета
+    if current_state in ["waiting_credit_report", "waiting_bankruptcy_report"]:
+        # Обработка кредитного отчета (включая банкротный анализ)
         handle_credit_report_pdf(message)
     else:
         # Обработка чека об оплате (существующая логика)
@@ -309,9 +348,14 @@ def handle_document(message):
 
 # Добавить в main.py
 
+# Модифицировать функцию handle_credit_report_pdf:
 def handle_credit_report_pdf(message):
-    """Обработка PDF файла кредитного отчета с генерацией заявлений"""
+    """Обработка PDF файла кредитного отчета с генерацией заявлений И банкротным анализом"""
     user_id = message.from_user.id
+    current_state = user_states.get(user_id)
+    
+    # Определяем тип обработки по состоянию пользователя
+    is_bankruptcy_mode = current_state == "waiting_bankruptcy_report"
     
     try:
         # Проверяем, что это PDF файл
@@ -324,10 +368,16 @@ def handle_credit_report_pdf(message):
             return
         
         # Отправляем сообщение о начале обработки
-        status_msg = bot.send_message(
-            message.chat.id, 
-            "⏳ Обрабатываю ваш кредитный отчет...\n📄 Извлекаю текст из PDF..."
-        )
+        if is_bankruptcy_mode:
+            status_msg = bot.send_message(
+                message.chat.id, 
+                "⏳ Анализирую ваш кредитный отчет для определения процедуры банкротства...\n📄 Извлекаю текст из PDF..."
+            )
+        else:
+            status_msg = bot.send_message(
+                message.chat.id, 
+                "⏳ Обрабатываю ваш кредитный отчет...\n📄 Извлекаю текст из PDF..."
+            )
         
         # Сохраняем файл во временную папку
         file_info = bot.get_file(message.document.file_id)
@@ -338,35 +388,63 @@ def handle_credit_report_pdf(message):
             f.write(bot.download_file(file_info.file_path))
         
         # Обновляем статус
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=status_msg.message_id,
-            text="⏳ Обрабатываю ваш кредитный отчет...\n🔍 Анализирую содержимое..."
-        )
+        if is_bankruptcy_mode:
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=status_msg.message_id,
+                text="⏳ Анализирую ваш кредитный отчет для определения процедуры банкротства...\n🧮 Рассчитываю банкротные критерии..."
+            )
+        else:
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=status_msg.message_id,
+                text="⏳ Обрабатываю ваш кредитный отчет...\n🔍 Анализирую содержимое..."
+            )
         
-        # ОТЛАДКА: Проверяем импорт
-        # print("[DEBUG] Пытаемся импортировать credit_application_generator...")
-        try:
-            from credit_application_generator import process_credit_report_with_applications
-            # print("[DEBUG] ✅ Импорт успешен!")
+        # Импортируем необходимые модули
+        from text_extractor import extract_text_from_pdf
+        from ocr import ocr_file
+        from credit_parser import extract_credit_data_with_total
+        
+        # Извлекаем текст из PDF
+        text = extract_text_from_pdf(file_path)
+        if not text.strip():
+            text = ocr_file(file_path)
+        
+        # Парсим кредитный отчет
+        parsed_data = extract_credit_data_with_total(text)
+        
+        if is_bankruptcy_mode:
+            # РЕЖИМ БАНКРОТНОГО КАЛЬКУЛЯТОРА
             
-            # НОВОЕ: Используем функцию с генерацией заявлений
-            result = process_credit_report_with_applications(file_path, user_id)
-            # print(f"[DEBUG] Результат: {result.keys() if result else 'None'}")
+            # Проводим анализ банкротства
+            bankruptcy_analysis = analyze_credit_report_for_bankruptcy(parsed_data)
             
-        except Exception as import_error:
-            # print(f"[ERROR] Ошибка импорта: {import_error}")
-            # Fallback - используем старую функцию
-            result = process_uploaded_file(file_path, user_id)
-            # print("[DEBUG] Используем старую функцию без генерации заявлений")
-        
-        # Создаем кнопки для навигации
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu"))
-        markup.add(types.InlineKeyboardButton("📊 Проверить другой отчет", callback_data="check_credit_report"))
-        
-        # Отправляем результат анализа
-        if result and "message" in result:
+            # Создаем кнопки для навигации
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu"))
+            markup.add(types.InlineKeyboardButton("📊 Проверить другой отчет", callback_data="bankruptcy_calculator"))
+            
+            # Отправляем результат банкротного анализа
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=status_msg.message_id,
+                text="✅ **Банкротный анализ завершен**",
+                parse_mode='Markdown'
+            )
+            
+            # Отправляем детальный анализ
+            send_long_message(
+                bot=bot,   
+                chat_id=message.chat.id,
+                text=bankruptcy_analysis,
+                reply_markup=markup,
+                parse_mode='Markdown'
+            )
+            
+        else:
+            # ОБЫЧНЫЙ РЕЖИМ ПРОВЕРКИ КРЕДИТНОГО ОТЧЕТА
+            
             # Обновляем статус для генерации заявлений
             bot.edit_message_text(
                 chat_id=message.chat.id,
@@ -374,91 +452,104 @@ def handle_credit_report_pdf(message):
                 text="⏳ Анализ завершен! Генерирую заявления к кредиторам..."
             )
             
-            # Отправляем анализ
-            bot.send_message(
-                chat_id=message.chat.id,
-                text=f"✅ **Анализ завершен**\n\n{result['message']}",
-                reply_markup=markup,
-                parse_mode='Markdown'
-            )
+            # Импортируем функцию генерации заявлений
+            try:
+                from credit_application_generator import process_credit_report_with_applications
+                result = process_credit_report_with_applications(file_path, user_id)
+            except Exception as import_error:
+                print(f"[ERROR] Ошибка импорта генератора заявлений: {import_error}")
+                # Fallback - используем стандартную обработку
+                result = {
+                    "message": format_summary(parsed_data),
+                    "type": "credit_report"
+                }
             
-            # ОТЛАДКА: Проверяем наличие заявлений
-            # print(f"[DEBUG] Проверяем applications: {result.get('applications', 'НЕТ')}")
+            # Создаем кнопки для навигации
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu"))
+            markup.add(types.InlineKeyboardButton("📊 Проверить другой отчет", callback_data="check_credit_report"))
+            markup.add(types.InlineKeyboardButton("🧮 Банкротный калькулятор", callback_data="bankruptcy_calculator"))
             
-            # НОВОЕ: Отправляем сгенерированные заявления
-            if result.get('applications'):
-                applications = result['applications']
-                # print(f"[DEBUG] Найдено {len(applications)} заявлений")
-                
-                # Информируем о количестве заявлений
-                bot.send_message(
+            # Отправляем анализ кредитного отчета
+            if result and "message" in result:
+                send_long_message(
+                    bot=bot,
                     chat_id=message.chat.id,
-                    text=f"📄 Генерирую {len(applications)} заявлений к кредиторам..."
-                )
-                
-                # Отправляем каждое заявление как отдельный PDF
-                for i, app in enumerate(applications, 1):
-                    try:
-                        # print(f"[DEBUG] Обрабатываем заявление {i}: {app['creditor']}")
-                        
-                        # Создаем временный файл с PDF содержимым
-                        temp_pdf_path = f"temp/application_{i}_{user_id}.pdf"
-                        with open(temp_pdf_path, 'wb') as f:
-                            f.write(app['content'])
-                        
-                        # print(f"[DEBUG] PDF файл создан: {temp_pdf_path}")
-                        
-                        # Отправляем PDF файл
-                        with open(temp_pdf_path, 'rb') as pdf_file:
-                            bot.send_document(
-                                chat_id=message.chat.id,
-                                document=pdf_file,
-                                caption=f"📋 Заявление #{i}: {app['creditor']}\n💰 Сумма долга: {app['debt_amount']:,.2f} ₸",
-                                visible_file_name=app['filename']
-                            )
-                        
-                        # print(f"[DEBUG] ✅ Заявление {i} отправлено")
-                        
-                        # Удаляем временный файл
-                        try:
-                            os.remove(temp_pdf_path)
-                        except:
-                            pass
-                            
-                    except Exception as e:
-                        print(f"[ERROR] Ошибка отправки заявления {i}: {e}")
-                        bot.send_message(
-                            chat_id=message.chat.id,
-                            text=f"❌ Ошибка при отправке заявления для {app['creditor']}: {str(e)}"
-                        )
-                
-                # Итоговое сообщение
-                bot.send_message(
-                    chat_id=message.chat.id,
-                    text=f"✅ **Готово!**\n\n"
-                         f"📊 Отчет проанализирован\n"
-                         f"📄 Отправлено {len(applications)} заявлений\n\n"
-                         f"💡 **Что делать дальше:**\n"
-                         f"1. Распечатайте заявления\n"  
-                         f"2. Подпишите и поставьте дату\n"
-                         f"3. Отправьте кредиторам по почте\n"
-                         f"4. Приложите копию кредитного отчета",
+                    text=f"✅ **Анализ завершен**\n\n{result['message']}",
+                    reply_markup=markup,
                     parse_mode='Markdown'
                 )
+                
+                # Отправляем сгенерированные заявления (если есть)
+                if result.get('applications'):
+                    applications = result['applications']
+                    bot.send_message(
+                        chat_id=message.chat.id,
+                        text=f"📄 Генерирую {len(applications)} заявлений к кредиторам..."
+                    )
+                    
+                    # Отправляем каждое заявление как отдельный PDF
+                    for i, app in enumerate(applications, 1):
+                        try:
+                            temp_pdf_path = f"temp/application_{i}_{user_id}.pdf"
+                            with open(temp_pdf_path, 'wb') as f:
+                                f.write(app['content'])
+                            
+                            with open(temp_pdf_path, 'rb') as pdf_file:
+                                bot.send_document(
+                                    chat_id=message.chat.id,
+                                    document=pdf_file,
+                                    caption=f"📋 Заявление #{i}: {app['creditor']}\n💰 Сумма долга: {app['debt_amount']:,.2f} ₸",
+                                    visible_file_name=app['filename']
+                                )
+                            
+                            # Удаляем временный файл
+                            try:
+                                os.remove(temp_pdf_path)
+                            except:
+                                pass
+                                
+                        except Exception as e:
+                            print(f"[ERROR] Ошибка отправки заявления {i}: {e}")
+                    
+                    # ДОБАВЛЯЕМ БАНКРОТНЫЙ АНАЛИЗ после основного анализа
+                    bankruptcy_analysis = analyze_credit_report_for_bankruptcy(parsed_data)
+                    
+                    bot.send_message(
+                        chat_id=message.chat.id,
+                        text=f"🧮 **ДОПОЛНИТЕЛЬНО: Банкротный анализ**\n\n{bankruptcy_analysis}",
+                        parse_mode='Markdown'
+                    )
+                    
+                    # Итоговое сообщение
+                    bot.send_message(
+                        chat_id=message.chat.id,
+                        text=f"✅ **Готово!**\n\n"
+                             f"📊 Отчет проанализирован\n"
+                             f"📄 Отправлено {len(applications)} заявлений\n"
+                             f"🧮 Проведен банкротный анализ\n\n"
+                             f"💡 **Что делать дальше:**\n"
+                             f"1. Распечатайте заявления\n"  
+                             f"2. Подпишите и поставьте дату\n"
+                             f"3. Отправьте кредиторам по почте\n"
+                             f"4. Рассмотрите рекомендации по банкротству",
+                        parse_mode='Markdown'
+                    )
+                else:
+                    # Если заявления не сгенерированы, все равно показываем банкротный анализ
+                    bankruptcy_analysis = analyze_credit_report_for_bankruptcy(parsed_data)
+                    
+                    bot.send_message(
+                        chat_id=message.chat.id,
+                        text=f"🧮 **ДОПОЛНИТЕЛЬНО: Банкротный анализ**\n\n{bankruptcy_analysis}",
+                        parse_mode='Markdown'
+                    )
             else:
-                print("[DEBUG] ❌ Applications отсутствуют или пусты")
                 bot.send_message(
                     chat_id=message.chat.id,
-                    text="⚠️ Не удалось сгенерировать заявления. Проверьте логи сервера."
+                    text="❌ Не удалось обработать файл.\nПроверьте, что это корректный кредитный отчет.",
+                    reply_markup=markup
                 )
-                
-        else:
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=status_msg.message_id,
-                text="❌ Не удалось обработать файл.\nПроверьте, что это корректный кредитный отчет.",
-                reply_markup=markup
-            )
         
         # Удаляем исходный временный файл
         try:
@@ -476,10 +567,11 @@ def handle_credit_report_pdf(message):
         user_states.pop(user_id, None)
         
         # Логируем успешную обработку
-        # print(f"[INFO] Успешно обработан кредитный отчет пользователя {user_id}")
+        mode = "банкротного анализа" if is_bankruptcy_mode else "кредитного отчета"
+        print(f"[INFO] Успешно обработан {mode} пользователя {user_id}")
         
     except Exception as e:
-        print(f"[ERROR] Ошибка при обработке кредитного отчета: {e}")
+        print(f"[ERROR] Ошибка при обработке: {e}")
         import traceback
         traceback.print_exc()
         try:
@@ -493,7 +585,7 @@ def handle_credit_report_pdf(message):
                 message.chat.id,
                 f"❌ Произошла ошибка: {str(e)}\nПопробуйте позже или обратитесь к администратору."
             )
-       
+                
 def handle_payment_receipt(message):
     """Обработка чека об оплате (существующая логика)"""
     user_id = message.from_user.id
@@ -585,6 +677,35 @@ def grant_access(message):
             message, 
             "⚠️ Ошибка. Формат: /grant_access [user_id] [количество_вопросов]"
         )
+
+# Обновить handle_bankruptcy_calculator для правильной работы:
+@bot.callback_query_handler(func=lambda call: call.data == "bankruptcy_calculator")
+def handle_bankruptcy_calculator(call):
+    user_id = call.from_user.id
+    user_states[user_id] = "waiting_bankruptcy_report"  # Специальное состояние
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=(
+            "🧮 **Банкротный калькулятор**\n\n"
+            "📄 Загрузите PDF файл вашего кредитного отчета из ПКБ или ГКБ.\n\n"
+            "🔍 **Система определит:**\n"
+            "• Подходит ли внесудебное банкротство\n"
+            "• Требуется ли судебное банкротство  \n"
+            "• Возможно ли восстановление платежеспособности\n\n"
+            "📊 **Анализируемые критерии:**\n"
+            "• Общая сумма долга (порог 6,291,200 ₸)\n"
+            "• Количество дней просрочки (минимум 365)\n"
+            "• Наличие залогового имущества\n\n"
+            "📎 **Отправьте PDF файл прямо сейчас**"
+        ),
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
