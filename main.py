@@ -7,6 +7,7 @@ from legal_engine import query
 from datetime import datetime, timezone, timedelta
 from telebot import types
 from document_processor import process_uploaded_file
+from credit_parser import format_summary
 import time
 import requests
 from pydub import AudioSegment
@@ -444,6 +445,29 @@ def handle_credit_report_pdf(message):
         # Парсим кредитный отчет
         parsed_data = extract_credit_data_with_total(text)
         
+        # 🆕 ДОБАВИТЬ ЭТИ СТРОКИ - СОХРАНЕНИЕ В БД:
+        try:
+            # Сохраняем документ в БД
+            doc_record = {
+                "user_id": user_id,
+                "doc_type": "credit_report",
+                "text": text,
+                "uploaded_at": datetime.utcnow().isoformat()
+            }
+            db['documents'].insert_one(doc_record)
+            
+            # Сохраняем распарсенные данные в отдельную коллекцию
+            db['credit_reports'].insert_one({
+                "user_id": user_id,
+                "parsed": parsed_data,
+                "uploaded_at": datetime.utcnow().isoformat()
+            })
+            
+            print(f"[INFO] Сохранен кредитный отчет пользователя {user_id} в БД")
+            
+        except Exception as save_error:
+            print(f"[ERROR] Ошибка сохранения в БД: {save_error}")
+
         if is_bankruptcy_mode:
             # РЕЖИМ БАНКРОТНОГО КАЛЬКУЛЯТОРА
             
