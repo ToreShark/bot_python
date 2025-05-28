@@ -125,24 +125,58 @@ class BankruptcyCalculator:
         }
     
     def _analyze_collaterals(self, collaterals: List[Dict]) -> Dict:
-        """Анализирует залоговое имущество"""
+        """Анализирует залоговое имущество с исключением ломбардов"""
         
-        has_collaterals = len(collaterals) > 0
-        total_collateral_value = sum(c.get('market_value', 0) for c in collaterals)
+        # Фильтруем залоги - исключаем ломбарды и мелкие залоги
+        significant_collaterals = []
+        excluded_collaterals = []
         
-        collateral_details = []
+        # Минимальная стоимость залога для учета в банкротстве (1 млн тенге)
+        MIN_COLLATERAL_VALUE = 1000000
+        
         for collateral in collaterals:
-            collateral_details.append({
-                'creditor': collateral.get('creditor', 'Неизвестный'),
-                'type': collateral.get('collateral_type', 'Неизвестный тип'),
-                'value': collateral.get('market_value', 0)
-            })
+            creditor_name = collateral.get('creditor', '').lower()
+            collateral_value = collateral.get('market_value', 0)
+            
+            # Определяем, является ли это ломбардом или мелким залогом
+            is_pawnshop = any(keyword in creditor_name for keyword in [
+                'ломбард', 'lombard', 'pawnshop', 'залог', 
+                'заложи', 'золото', 'ювели'
+            ])
+            
+            is_small_collateral = collateral_value < MIN_COLLATERAL_VALUE
+            
+            # Исключаем ломбарды и мелкие залоги
+            if is_pawnshop or is_small_collateral:
+                excluded_collaterals.append({
+                    'creditor': collateral.get('creditor', 'Неизвестный'),
+                    'type': collateral.get('collateral_type', 'Неизвестный тип'),
+                    'value': collateral_value,
+                    'exclusion_reason': 'ломбард' if is_pawnshop else 'мелкий залог'
+                })
+            else:
+                significant_collaterals.append({
+                    'creditor': collateral.get('creditor', 'Неизвестный'),
+                    'type': collateral.get('collateral_type', 'Неизвестный тип'),
+                    'value': collateral_value
+                })
+        
+        # Считаем только значимые залоги
+        has_significant_collaterals = len(significant_collaterals) > 0
+        total_significant_value = sum(c['value'] for c in significant_collaterals)
+        total_excluded_value = sum(c['value'] for c in excluded_collaterals)
+        
+        logger.info(f"Залоги: значимых={len(significant_collaterals)}, исключено={len(excluded_collaterals)}")
+        logger.info(f"Стоимость: значимых={total_significant_value:,.0f}, исключено={total_excluded_value:,.0f}")
         
         return {
-            'has_collaterals': has_collaterals,
-            'total_value': total_collateral_value,
-            'count': len(collaterals),
-            'details': collateral_details
+            'has_collaterals': has_significant_collaterals,  # Только значимые залоги влияют на банкротство
+            'total_value': total_significant_value,
+            'count': len(significant_collaterals),
+            'details': significant_collaterals,
+            'excluded_collaterals': excluded_collaterals,  # Для информации
+            'excluded_count': len(excluded_collaterals),
+            'excluded_value': total_excluded_value
         }
     
     def _determine_procedure(self, total_debt: float, overdue_analysis: Dict, collateral_analysis: Dict) -> Dict:
@@ -299,11 +333,21 @@ class BankruptcyCalculator:
                 "Рекомендуется уточнить фактическое состояние задолженности."
             )
         
-        # Предупреждения о залогах
+        # В функции _generate_warnings замените раздел с залогами на:
+
+        # Предупреждения о значимых залогах
         if collateral_analysis['has_collaterals']:
             warnings.append(
-                f"🔒 Обнаружено {collateral_analysis['count']} залоговых объектов на сумму "
+                f"🔒 Обнаружено {collateral_analysis['count']} значимых залоговых объектов на сумму "
                 f"{collateral_analysis['total_value']:,.2f} ₸. При банкротстве залоги могут быть реализованы."
+            )
+
+        # Информация об исключенных залогах
+        excluded_count = collateral_analysis.get('excluded_count', 0)
+        if excluded_count > 0:
+            warnings.append(
+                f"📝 Исключено из анализа {excluded_count} мелких залогов/ломбардов на сумму "
+                f"{collateral_analysis.get('excluded_value', 0):,.2f} ₸ (не влияют на процедуру)."
             )
         
         # Общие предупреждения
@@ -353,14 +397,32 @@ def format_bankruptcy_analysis(analysis: Dict) -> str:
     
     result += f"— Требование по просрочке (>365 дней): {'✅ Выполнено' if overdue['meets_overdue_requirement'] else '❌ Не выполнено'}\n\n"
     
-    # Анализ залогов
+    # Анализ залогов (замените этот раздел в функции format_bankruptcy_analysis)
     collateral = analysis['collateral_analysis']
-    if collateral['has_collaterals']:
+
+    if collateral['has_collaterals'] or collateral.get('excluded_count', 0) > 0:
         result += "🔒 **Залоговое имущество:**\n"
-        result += f"— Количество объектов: {collateral['count']}\n"
-        result += f"— Общая стоимость: {collateral['total_value']:,.2f} ₸\n"
-        for detail in collateral['details']:
-            result += f"  • {detail['creditor']}: {detail['type']} ({detail['value']:,.2f} ₸)\n"
+        
+        # Показываем значимые залоги (влияющие на банкротство)
+        if collateral['has_collaterals']:
+            result += f"— Значимых объектов: {collateral['count']}\n"
+            result += f"— Общая стоимость: {collateral['total_value']:,.2f} ₸\n"
+            for detail in collateral['details']:
+                result += f"  • {detail['creditor']}: {detail['type']} ({detail['value']:,.2f} ₸)\n"
+        
+        # Показываем исключенные залоги (не влияющие на банкротство)
+        excluded = collateral.get('excluded_collaterals', [])
+        if excluded:
+            result += f"\n📝 Исключено из анализа ({collateral['excluded_count']} объектов на {collateral['excluded_value']:,.2f} ₸):\n"
+            for exc in excluded[:3]:  # Показываем только первые 3
+                reason = "🏪 ломбард" if exc['exclusion_reason'] == 'ломбард' else "💰 < 1 млн ₸"
+                result += f"  • {exc['creditor']}: {exc['type']} ({reason})\n"
+            
+            if len(excluded) > 3:
+                result += f"  • ... и еще {len(excluded) - 3} объектов\n"
+            
+            result += f"\n💡 *Мелкие залоги и ломбарды не влияют на выбор процедуры банкротства*\n"
+        
         result += "\n"
     else:
         result += "🔒 **Залоговое имущество:** Отсутствует\n\n"
