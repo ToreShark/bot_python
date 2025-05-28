@@ -132,31 +132,31 @@ def main(message):
             except Exception as e:
                 print(f"[WARN] Не удалось отправить сообщение админу {admin_id}: {e}")
 
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callback_query(call):
-    user_id = call.from_user.id
+# @bot.callback_query_handler(func=lambda call: True)
+# def handle_callback_query(call):
+#     user_id = call.from_user.id
     
-    if call.data == "lawyer_consultation":
-        handle_lawyer_consultation(call)
-    elif call.data == "check_credit_report":
-        handle_credit_report_request(call)
-    elif call.data == "bankruptcy_calculator":
-        handle_bankruptcy_calculator(call)
-    elif call.data == "bot_info":
-        handle_bot_info(call)
-    elif call.data.startswith("pay_"):
-        handle_payment_callback(call)
-    elif call.data == "back_to_menu":
-        # Возврат в главное меню
-        main_menu_markup = create_main_menu()
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text="🏠 Главное меню\nВыберите нужную услугу:",
-            reply_markup=main_menu_markup
-        )
+#     if call.data == "lawyer_consultation":
+#         handle_lawyer_consultation(call)
+#     elif call.data == "check_credit_report":
+#         handle_credit_report_request(call)
+#     elif call.data == "bankruptcy_calculator":
+#         handle_bankruptcy_calculator(call)
+#     elif call.data == "bot_info":
+#         handle_bot_info(call)
+#     elif call.data.startswith("pay_"):
+#         handle_payment_callback(call)
+#     elif call.data == "back_to_menu":
+#         # Возврат в главное меню
+#         main_menu_markup = create_main_menu()
+#         bot.edit_message_text(
+#             chat_id=call.message.chat.id,
+#             message_id=call.message.message_id,
+#             text="🏠 Главное меню\nВыберите нужную услугу:",
+#             reply_markup=main_menu_markup
+#         )
     
-    bot.answer_callback_query(call.id)
+#     bot.answer_callback_query(call.id)
 
 def create_main_menu():
     """Создает разметку главного меню"""
@@ -326,6 +326,36 @@ def handle_payment_callback(call):
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
         text=payment_text,
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+    # Добавить эту функцию после handle_payment_callback
+
+def handle_bankruptcy_calculator(call):
+    """Обработка запроса на банкротный калькулятор"""
+    user_id = call.from_user.id
+    user_states[user_id] = "waiting_bankruptcy_report"  # Специальное состояние
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=(
+            "🧮 **Банкротный калькулятор**\n\n"
+            "📄 Загрузите PDF файл вашего кредитного отчета из ПКБ или ГКБ.\n\n"
+            "🔍 **Система определит:**\n"
+            "• Подходит ли внесудебное банкротство\n"
+            "• Требуется ли судебное банкротство  \n"
+            "• Возможно ли восстановление платежеспособности\n\n"
+            "📊 **Анализируемые критерии:**\n"
+            "• Общая сумма долга (порог 6,291,200 ₸)\n"
+            "• Количество дней просрочки (минимум 365)\n"
+            "• Наличие залогового имущества\n\n"
+            "📎 **Отправьте PDF файл прямо сейчас**"
+        ),
         reply_markup=markup,
         parse_mode='Markdown'
     )
@@ -639,73 +669,212 @@ def handle_payment_receipt(message):
         except Exception as e:
             print(f"[WARN] Не удалось переслать файл админу {admin_id}: {e}")
 
-@bot.message_handler(commands=['grant_access'])
-def grant_access(message):
-    """Предоставление доступа администратором"""
+# Добавить эти функции в main.py
+
+@bot.message_handler(commands=['broadcast'])
+def broadcast_message(message):
+    """Массовая рассылка сообщений всем пользователям (только для администраторов)"""
     ADMIN_USER_IDS = [376068212, 827743984]
     if message.from_user.id not in ADMIN_USER_IDS:
         bot.reply_to(message, "⛔ У вас нет прав для выполнения этой команды.")
         return
 
     try:
-        _, user_id_str, limit_str = message.text.split()
-        user_id = int(user_id_str)
-        message_limit = int(limit_str)
-
-        result = users_collection.update_one(
-            {"user_id": user_id},
-            {"$set": {"access": True, "message_limit": message_limit}}
-        )
-
-        if result.matched_count == 0:
-            bot.reply_to(message, f"❌ Пользователь с ID {user_id} не найден.")
+        # Извлекаем текст сообщения после команды
+        command_parts = message.text.split(' ', 1)
+        if len(command_parts) < 2:
+            bot.reply_to(
+                message, 
+                "⚠️ Формат: /broadcast [текст сообщения]\n\n"
+                "Пример: /broadcast 🎉 Новые функции доступны!"
+            )
             return
-
-        # Уведомляем пользователя
+            
+        broadcast_text = command_parts[1]
+        
+        # Получаем всех пользователей из базы данных
+        all_users = list(users_collection.find({}, {"user_id": 1, "first_name": 1}))
+        
+        if not all_users:
+            bot.reply_to(message, "❌ В базе данных нет пользователей.")
+            return
+        
+        # Отправляем подтверждение админу
+        confirmation_text = (
+            f"📢 **Подтверждение рассылки**\n\n"
+            f"👥 Количество получателей: {len(all_users)}\n"
+            f"📝 Текст сообщения:\n{broadcast_text}\n\n"
+            f"⚠️ Отправить всем?"
+        )
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Отправить", callback_data=f"confirm_broadcast"),
+            types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_broadcast")
+        )
+        
+        # Сохраняем текст рассылки для использования в callback
+        user_states[message.from_user.id] = {
+            "type": "broadcast_confirmation",
+            "text": broadcast_text,
+            "users": all_users
+        }
+        
         bot.send_message(
-            user_id, 
-            f"✅ **Доступ активирован!**\n\n"
-            f"📝 Лимит консультаций: {message_limit}\n"
-            f"⚖️ Используйте /start для начала работы.",
+            message.chat.id,
+            confirmation_text,
+            reply_markup=markup,
             parse_mode='Markdown'
         )
-        bot.reply_to(message, f"✅ Доступ предоставлен пользователю {user_id}.")
         
     except Exception as e:
-        print(f"[ERROR grant_access] {e}")
-        bot.reply_to(
-            message, 
-            "⚠️ Ошибка. Формат: /grant_access [user_id] [количество_вопросов]"
+        print(f"[ERROR broadcast] {e}")
+        bot.reply_to(message, f"❌ Ошибка при подготовке рассылки: {str(e)}")
+
+@bot.callback_query_handler(func=lambda call: call.data in ["confirm_broadcast", "cancel_broadcast"])
+def handle_broadcast_callback(call):
+    """Обработка подтверждения/отмены рассылки"""
+    ADMIN_USER_IDS = [376068212, 827743984]
+    if call.from_user.id not in ADMIN_USER_IDS:
+        bot.answer_callback_query(call.id, "⛔ Доступ запрещен")
+        return
+        
+    user_state = user_states.get(call.from_user.id)
+    if not user_state or user_state.get("type") != "broadcast_confirmation":
+        bot.answer_callback_query(call.id, "⚠️ Сессия истекла")
+        return
+    
+    if call.data == "cancel_broadcast":
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="❌ Рассылка отменена."
         )
-
-# Обновить handle_bankruptcy_calculator для правильной работы:
-@bot.callback_query_handler(func=lambda call: call.data == "bankruptcy_calculator")
-def handle_bankruptcy_calculator(call):
-    user_id = call.from_user.id
-    user_states[user_id] = "waiting_bankruptcy_report"  # Специальное состояние
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
-
-    bot.edit_message_text(
+        user_states.pop(call.from_user.id, None)
+        bot.answer_callback_query(call.id, "Рассылка отменена")
+        return
+    
+    # Подтверждение рассылки
+    broadcast_text = user_state["text"]
+    all_users = user_state["users"]
+    
+    # Обновляем сообщение на статус отправки
+    status_msg = bot.edit_message_text(
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
-        text=(
-            "🧮 **Банкротный калькулятор**\n\n"
-            "📄 Загрузите PDF файл вашего кредитного отчета из ПКБ или ГКБ.\n\n"
-            "🔍 **Система определит:**\n"
-            "• Подходит ли внесудебное банкротство\n"
-            "• Требуется ли судебное банкротство  \n"
-            "• Возможно ли восстановление платежеспособности\n\n"
-            "📊 **Анализируемые критерии:**\n"
-            "• Общая сумма долга (порог 6,291,200 ₸)\n"
-            "• Количество дней просрочки (минимум 365)\n"
-            "• Наличие залогового имущества\n\n"
-            "📎 **Отправьте PDF файл прямо сейчас**"
-        ),
-        reply_markup=markup,
+        text=f"📤 Отправляю рассылку...\n👥 Пользователей: {len(all_users)}\n📊 Отправлено: 0"
+    )
+    
+    # Отправляем сообщения
+    sent_count = 0
+    failed_count = 0
+    
+    for i, user in enumerate(all_users):
+        try:
+            user_id = user["user_id"]
+            
+            # Создаем кнопку "В главное меню" для каждого сообщения рассылки
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu"))
+            
+            bot.send_message(
+                chat_id=user_id,
+                text=broadcast_text,
+                reply_markup=markup,
+                parse_mode='Markdown'
+            )
+            
+            sent_count += 1
+            
+            # Обновляем прогресс каждые 5 отправленных сообщений
+            if (i + 1) % 5 == 0:
+                try:
+                    bot.edit_message_text(
+                        chat_id=call.message.chat.id,
+                        message_id=status_msg.message_id,
+                        text=f"📤 Отправляю рассылку...\n👥 Пользователей: {len(all_users)}\n📊 Отправлено: {sent_count}"
+                    )
+                except:
+                    pass
+            
+            # Небольшая пауза чтобы не превысить лимиты Telegram API
+            time.sleep(0.1)
+            
+        except Exception as e:
+            failed_count += 1
+            print(f"[WARN] Не удалось отправить сообщение пользователю {user.get('user_id', 'unknown')}: {e}")
+    
+    # Итоговый отчет
+    final_report = (
+        f"✅ **Рассылка завершена**\n\n"
+        f"📊 **Статистика:**\n"
+        f"👥 Всего пользователей: {len(all_users)}\n"
+        f"✅ Успешно отправлено: {sent_count}\n"
+        f"❌ Ошибок: {failed_count}\n\n"
+        f"📝 **Отправленный текст:**\n{broadcast_text}"
+    )
+    
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=status_msg.message_id,
+        text=final_report,
         parse_mode='Markdown'
     )
+    
+    # Очищаем состояние
+    user_states.pop(call.from_user.id, None)
+    bot.answer_callback_query(call.id, f"Рассылка завершена! Отправлено: {sent_count}")
+
+# Также нужно обновить обработчик callback_query_handler, добавив новые условия:
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callback_query(call):
+    user_id = call.from_user.id
+    
+    if call.data == "lawyer_consultation":
+        handle_lawyer_consultation(call)
+    elif call.data == "check_credit_report":
+        handle_credit_report_request(call)
+    elif call.data == "bankruptcy_calculator":
+        handle_bankruptcy_calculator(call)
+    elif call.data == "bot_info":
+        handle_bot_info(call)
+    elif call.data.startswith("pay_"):
+        handle_payment_callback(call)
+    elif call.data == "back_to_menu":
+        # Возврат в главное меню
+        main_menu_markup = create_main_menu()
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="🏠 Главное меню\nВыберите нужную услугу:",
+            reply_markup=main_menu_markup
+        )
+    # ДОБАВИТЬ ЭТИ СТРОКИ:
+    elif call.data in ["confirm_broadcast", "cancel_broadcast"]:
+        handle_broadcast_callback(call)
+    
+    bot.answer_callback_query(call.id)
+
+# Пример текста для первой рассылки о новых функциях:
+ANNOUNCEMENT_TEXT = """🎉 **НОВЫЕ ФУНКЦИИ В БОТЕ!**
+
+🆕 **Что добавилось:**
+
+📄 **Автогенерация досудебных писем**
+• При анализе кредитного отчета бот теперь автоматически создает персональные письма ко всем вашим кредиторам
+• Готовые PDF документы для отправки по почте
+• Полностью бесплатно!
+
+🧮 **Банкротный калькулятор** 
+• Определяет подходящую процедуру банкротства
+• Анализирует критерии для внесудебного/судебного банкротства
+• Рекомендации по восстановлению платежеспособности
+
+✨ **Как использовать:**
+Нажмите /start и выберите нужную услугу из обновленного меню!
+
+💡 Все функции анализа кредитных отчетов остаются бесплатными."""
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
