@@ -28,44 +28,52 @@ db = client[db_name]
 docs_collection = db['documents']
 
 
+# В файле document_processor.py замените функцию process_uploaded_file:
+
 def process_uploaded_file(filepath, user_id):
-    # 1. Пытаемся извлечь текст напрямую
+    # 1. Извлекаем текст из PDF
     text = extract_text_from_pdf(filepath)
-    # print(f"[DEBUG] Direct PDF text length: {len(text)}")
-
-     # 🔍 Сохраняем извлечённый текст для отладки
-    with open("debug_text_output.txt", "w", encoding="utf-8") as f:
-        f.write(text)
-
-    # 2. Если текста нет — OCR
+    
+    # 2. Если текста нет — используем OCR
     if not text.strip():
-        # print("[INFO] PDF не содержит текста. Запускаем OCR...")
         text = ocr_file(filepath)
-        # print(f"[DEBUG] OCR text length: {len(text)}")
-
-         # 🔍 Сохраняем текст после OCR тоже
-        with open("debug_text_output_ocr.txt", "w", encoding="utf-8") as f:
-            f.write(text)
 
     # 3. Определяем тип документа
     doc_type = detect_document_type(text)
 
-    # 4. Сохраняем в Mongo
-    doc_record = {
-        "user_id": user_id,
-        "doc_type": doc_type,
-        "text": text,
-        "uploaded_at": datetime.utcnow().isoformat()
-    }
-    docs_collection.insert_one(doc_record)
-
-     # Распознаём кредитный отчёт
+    # 4. Обрабатываем кредитный отчёт
     if doc_type == "credit_report":
-        # print(f"[DEBUG] Начинаем парсинг, длина текста: {len(text)}")
+        # Парсим отчет
         parsed = extract_credit_data_with_total(text)
-        # print(f"[DEBUG] Результат парсинга: {parsed}")
+        
+        # 🔍 ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО ИИН
+        iin = parsed.get("personal_info", {}).get("iin")
+        
+        if iin:
+            # Ищем в базе отчет с таким же ИИН
+            existing = db['credit_reports'].find_one({"parsed.personal_info.iin": iin})
+            
+            if existing:
+                # Если найден дубликат - НЕ сохраняем
+                print(f"[INFO] Найден дубликат отчета для ИИН {iin} - пропускаем")
+                summary = format_summary(existing["parsed"])
+                return {
+                    "type": doc_type, 
+                    "message": f"📄 Отчёт уже существует в базе данных.\n\n{summary}"
+                }
+        
+        # Если дубликата нет - сохраняем как обычно
+        print(f"[INFO] Сохраняем новый отчет для ИИН {iin or 'без ИИН'}")
+        
+        # Сохраняем документ
+        docs_collection.insert_one({
+            "user_id": user_id,
+            "doc_type": doc_type,
+            "text": text,
+            "uploaded_at": datetime.utcnow().isoformat()
+        })
 
-        # Сохраняем в отдельную коллекцию
+        # Сохраняем парсинг
         db['credit_reports'].insert_one({
             "user_id": user_id,
             "parsed": parsed,
@@ -73,13 +81,28 @@ def process_uploaded_file(filepath, user_id):
         })
 
         summary = format_summary(parsed)
-        return {"type": doc_type, "message": f"📄 Отчёт обработан.\n\n{summary}"}
+        return {
+            "type": doc_type, 
+            "message": f"📄 Отчёт обработан.\n\n{summary}"
+        }
 
-    # 5. Ответ (оставляем только для других типов)
+    # 5. Обрабатываем чеки об оплате (без проверки дубликатов)
     elif doc_type == "payment_receipt":
+        docs_collection.insert_one({
+            "user_id": user_id,
+            "doc_type": doc_type,
+            "text": text,
+            "uploaded_at": datetime.utcnow().isoformat()
+        })
         return {"type": doc_type, "message": "📸 Квитанция получена. Ожидайте подтверждения."}
-    else:
-        return {"type": "unknown", "message": "❓ Документ получен, но тип не распознан."}
-
     
+    # 6. Неизвестные документы
+    else:
+        docs_collection.insert_one({
+            "user_id": user_id,
+            "doc_type": doc_type,
+            "text": text,
+            "uploaded_at": datetime.utcnow().isoformat()
+        })
+        return {"type": "unknown", "message": "❓ Документ получен, но тип не распознан."}  
     
