@@ -551,14 +551,14 @@ def handle_credit_report_pdf(message):
                         except Exception as e:
                             print(f"[ERROR] Ошибка отправки заявления {i}: {e}")
                     
-                    # ДОБАВЛЯЕМ БАНКРОТНЫЙ АНАЛИЗ после основного анализа
-                    bankruptcy_analysis = analyze_credit_report_for_bankruptcy(parsed_data)
+                    # # ДОБАВЛЯЕМ БАНКРОТНЫЙ АНАЛИЗ после основного анализа
+                    # bankruptcy_analysis = analyze_credit_report_for_bankruptcy(parsed_data)
                     
-                    bot.send_message(
-                        chat_id=message.chat.id,
-                        text=f"🧮 **ДОПОЛНИТЕЛЬНО: Банкротный анализ**\n\n{bankruptcy_analysis}",
-                        parse_mode='Markdown'
-                    )
+                    # bot.send_message(
+                    #     chat_id=message.chat.id,
+                    #     text=f"🧮 **ДОПОЛНИТЕЛЬНО: Банкротный анализ**\n\n{bankruptcy_analysis}",
+                    #     parse_mode='Markdown'
+                    # )
                     
                     # Итоговое сообщение
                     bot.send_message(
