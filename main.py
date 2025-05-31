@@ -248,6 +248,7 @@ def handle_credit_report_request(call):
     user_states[user_id] = "waiting_credit_report"
     
     markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❓ Как получить отчет?", callback_data="how_to_get_report"))
     markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
     
     instruction_text = (
@@ -339,6 +340,7 @@ def handle_bankruptcy_calculator(call):
     user_states[user_id] = "waiting_bankruptcy_report"  # Специальное состояние
 
     markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❓ Как получить отчет?", callback_data="how_to_get_report"))
     markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
 
     bot.edit_message_text(
@@ -848,6 +850,8 @@ def handle_callback_query(call):
         handle_bankruptcy_calculator(call)
     elif call.data == "bot_info":
         handle_bot_info(call)
+    elif call.data == "how_to_get_report":
+        handle_how_to_get_report(call)
     elif call.data.startswith("pay_"):
         handle_payment_callback(call)
     elif call.data == "back_to_menu":
@@ -1033,7 +1037,45 @@ def handle_voice_message(message):
     
     # Существующий код обработки голосовых сообщений...
     # (можно скопировать из оригинального кода)
-
+def handle_how_to_get_report(call):
+    """Инструкция по получению кредитного отчета"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu"))
+    
+    instruction_text = (
+        "📋 **Как получить кредитный отчет**\n\n"
+        
+        "🌐 **Официальный сайт:** https://id.mkb.kz/#/auth\n\n"
+        
+        "⚠️ **ВАЖНО:** Используйте только **персональный кредитный отчет** с этого сайта!\n\n"
+        
+        "📋 **Пошаговая инструкция:**\n"
+        "1. Перейдите на сайт ГКБ: https://id.mkb.kz/#/auth\n"
+        "2. Зарегистрируйтесь или войдите в личный кабинет\n"
+        "3. Найдите раздел 'Персональный кредитный отчет'\n"
+        "4. Выберите язык: **русский** (рекомендуется)\n"
+        "5. Скачайте отчет в формате PDF\n\n"
+        
+        "✅ **Почему именно этот отчет:**\n"
+        "• Содержит актуальную информацию\n"
+        "• Правильный формат для анализа ботом\n"
+        "• Показывает все активные кредиты и долги\n\n"
+        
+        "❌ **Не подходят:**\n"
+        "• Отчеты с других сайтов\n"
+        "• Устаревшие версии отчетов\n"
+        "• Скриншоты или фото экрана\n\n"
+        
+        "🛡️ **Гарантия качества:** Бот корректно анализирует только официальные персональные отчеты с ГКБ."
+    )
+    
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=instruction_text,
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
 # Запуск бота
 if __name__ == "__main__":
     print("[INFO] Бот запущен...")
