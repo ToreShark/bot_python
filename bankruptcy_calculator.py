@@ -44,6 +44,11 @@ class BankruptcyCalculator:
             obligations = parsed_data.get('obligations', [])
             collaterals = parsed_data.get('collaterals', [])
             personal_info = parsed_data.get('personal_info', {})
+
+            # 🔁 Автоматический пересчёт, если total_debt отсутствует или равен 0
+            if total_debt == 0 and obligations:
+                total_debt = sum(o.get('balance', 0) for o in obligations)
+                logger.warning("💡 total_debt рассчитан автоматически по сумме обязательств")
             
             logger.info(f"Анализ банкротства: долг={total_debt}, обязательств={len(obligations)}, залогов={len(collaterals)}")
             

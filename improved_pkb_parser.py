@@ -409,54 +409,114 @@ class FinalPKBParser:
         
         return creditors
     
+    # def group_creditors(self, creditors: List[Dict]) -> Dict[str, List[Dict]]:
+    #     """Группирует кредиторов по названию с улучшенной нормализацией"""
+    #     groups = {}
+    #     for creditor in creditors:
+    #         name = creditor["creditor"]
+            
+    #         # УЛУЧШЕННАЯ НОРМАЛИЗАЦИЯ:
+    #         # 1. Приводим к нижнему регистру для сравнения
+    #         normalized_lower = name.lower()
+            
+    #         # 2. Заменяем разные типы кавычек на стандартные
+    #         normalized_lower = re.sub(r'["""«»„"'']', '"', normalized_lower)
+            
+    #         # 3. Убираем лишние пробелы
+    #         normalized_lower = re.sub(r'\s+', ' ', normalized_lower).strip()
+            
+    #         # 4. КЛЮЧЕВОЕ: Нормализуем ТОО/АО - убираем организационно-правовую форму для группировки
+    #         # Убираем "тоо", "ао", "оао", "зао" в начале
+    #         normalized_lower = re.sub(r'^\s*(тоо|ао|оао|зао|ооо)\s*', '', normalized_lower)
+            
+    #         # 5. Убираем кавычки для группировки (но сохраняем оригинальное имя для отображения)
+    #         normalized_lower = normalized_lower.replace('"', '').strip()
+            
+    #         # Используем нормализованное имя как ключ для группировки
+    #         group_key = normalized_lower
+            
+    #         if group_key not in groups:
+    #             groups[group_key] = {
+    #                 "display_name": name,  # Сохраняем ПЕРВОЕ найденное имя для отображения
+    #                 "contracts": []
+    #             }
+    #         else:
+    #             # Если уже есть группа, выбираем наиболее полное название для отображения
+    #             existing_name = groups[group_key]["display_name"]
+    #             if len(name) > len(existing_name):  # Более длинное имя обычно более полное
+    #                 groups[group_key]["display_name"] = name
+                    
+    #         groups[group_key]["contracts"].append(creditor)
+            
+    #         self.logger.info(f"Группировка: '{name}' -> ключ: '{group_key}' -> отображение: '{groups[group_key]['display_name']}'")
+        
+    #     # Преобразуем в старый формат для совместимости
+    #     result = {}
+    #     for group_key, group_data in groups.items():
+    #         result[group_data["display_name"]] = group_data["contracts"]
+        
+    #     return result
+    
     def group_creditors(self, creditors: List[Dict]) -> Dict[str, List[Dict]]:
-        """Группирует кредиторов по названию с улучшенной нормализацией"""
+        """
+        Группирует кредиторов по названию с улучшенной нормализацией:
+        - Удаляет лишние кавычки, формы типа "ТОО", "АО"
+        - Приводит к нижнему регистру для ключа группировки
+        - Сохраняет наиболее полное название для отображения
+        """
+        def improved_normalize_creditor_name(name: str) -> str:
+            # Приведение всех кавычек к обычным
+            name = re.sub(r'[«»„“”]', '"', name)
+            while '""' in name:
+                name = name.replace('""', '"')
+            name = re.sub(r'\bс правом обратного выкупа\b', '', name, flags=re.IGNORECASE)
+            name = re.sub(r'^\s*(тоо|ао|оао|зао|ооо)\s*', '', name, flags=re.IGNORECASE)
+            name = name.strip('" ').strip()
+            name = re.sub(r'[\)"]+$', '', name).strip()
+            return name
+
         groups = {}
+        
         for creditor in creditors:
             name = creditor["creditor"]
             
-            # УЛУЧШЕННАЯ НОРМАЛИЗАЦИЯ:
-            # 1. Приводим к нижнему регистру для сравнения
-            normalized_lower = name.lower()
+            # 🧠 Ключ: нормализуем имя (без регистра), чтобы сгруппировать похожие
+            normalized_key = improved_normalize_creditor_name(name).lower()
+            display_name = self._normalize_creditor_display(name)
+
+            # print(f"\n📌 СЫРОЙ кредитор: {name}")
+            # print(f"🔑 Ключ группировки: {normalized_key}")
+            # print(f"🪪 Отображаемое имя: {display_name}")
             
-            # 2. Заменяем разные типы кавычек на стандартные
-            normalized_lower = re.sub(r'["""«»„"'']', '"', normalized_lower)
-            
-            # 3. Убираем лишние пробелы
-            normalized_lower = re.sub(r'\s+', ' ', normalized_lower).strip()
-            
-            # 4. КЛЮЧЕВОЕ: Нормализуем ТОО/АО - убираем организационно-правовую форму для группировки
-            # Убираем "тоо", "ао", "оао", "зао" в начале
-            normalized_lower = re.sub(r'^\s*(тоо|ао|оао|зао|ооо)\s*', '', normalized_lower)
-            
-            # 5. Убираем кавычки для группировки (но сохраняем оригинальное имя для отображения)
-            normalized_lower = normalized_lower.replace('"', '').strip()
-            
-            # Используем нормализованное имя как ключ для группировки
-            group_key = normalized_lower
-            
-            if group_key not in groups:
-                groups[group_key] = {
-                    "display_name": name,  # Сохраняем ПЕРВОЕ найденное имя для отображения
+            if normalized_key not in groups:
+                groups[normalized_key] = {
+                    "display_name": display_name,  # уже нормализован
                     "contracts": []
                 }
             else:
-                # Если уже есть группа, выбираем наиболее полное название для отображения
-                existing_name = groups[group_key]["display_name"]
-                if len(name) > len(existing_name):  # Более длинное имя обычно более полное
-                    groups[group_key]["display_name"] = name
-                    
-            groups[group_key]["contracts"].append(creditor)
+                existing_display = groups[normalized_key]["display_name"]
+                # сравниваем по длине нормализованных, но сохраняем нормализованное
+                if len(display_name) > len(existing_display):
+                    groups[normalized_key]["display_name"] = display_name
+
             
-            self.logger.info(f"Группировка: '{name}' -> ключ: '{group_key}' -> отображение: '{groups[group_key]['display_name']}'")
+            groups[normalized_key]["contracts"].append(creditor)
         
-        # Преобразуем в старый формат для совместимости
+        # 🎯 Возвращаем в нужной форме: {отображаемое имя: [контракты]}
         result = {}
-        for group_key, group_data in groups.items():
+        for group_data in groups.values():
             result[group_data["display_name"]] = group_data["contracts"]
         
         return result
-    
+
+    def _normalize_creditor_display(self, name: str) -> str:
+        """Нормализует имя кредитора для вывода пользователю"""
+        name = re.sub(r'[«»„“”]', '"', name)
+        name = name.replace('""', '"')
+        name = re.sub(r'\bс правом обратного выкупа\b', '', name, flags=re.IGNORECASE)
+        name = name.strip(' "\')')
+        return name.strip()
+
     def parse(self, text: str) -> Dict:
         """ИСПРАВЛЕННЫЙ: Основной метод парсинга отчета ПКБ"""
         try:
@@ -513,9 +573,11 @@ class FinalPKBParser:
                         latest_date = c["last_payment_date"]
                         last_payment_amount = c.get("last_payment_amount", 0.0)
                         last_payment_date = c["last_payment_date"]
-                
+                # 🛠️ Очищаем имя кредитора даже для отображения
+                # normalized_display_name = self._normalize_creditor_display(group_name)
+                normalized_display_name = group_name
                 obligations.append({
-                    "creditor": group_name,
+                    "creditor": normalized_display_name,
                     "balance": round(total_group_debt, 2),
                     "monthly_payment": round(total_group_payment, 2),
                     "overdue_amount": round(total_group_overdue, 2),
