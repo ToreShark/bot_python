@@ -7,6 +7,7 @@ from text_extractor import extract_text_from_pdf
 from ocr import ocr_file, detect_document_type
 from credit_parser import extract_credit_data_with_total, format_summary
 from dotenv import load_dotenv
+import hashlib
 
 load_dotenv()  # Подгружаем .env переменные
 
@@ -37,6 +38,24 @@ def process_uploaded_file(filepath, user_id):
     # 2. Если текста нет — используем OCR
     if not text.strip():
         text = ocr_file(filepath)
+    # 🔍 DEBUG: Сохраняем извлеченный текст для отладки
+    if DEBUG_MODE:  # Только в режиме разработки
+        # Создаем уникальное имя по user_id и имени файла
+        base_name = os.path.basename(filepath)
+        hash_id = hashlib.md5((str(user_id) + base_name).encode()).hexdigest()[:8]
+        debug_filename = f"debug_text_output_{user_id}_{hash_id}.txt"
+        try:
+            with open(debug_filename, 'w', encoding='utf-8') as debug_file:
+                debug_file.write(f"=== DEBUG OUTPUT для пользователя {user_id} ===\n")
+                debug_file.write(f"Файл: {filepath}\n")
+                debug_file.write(f"Время: {datetime.utcnow().isoformat()}\n")
+                debug_file.write(f"Длина текста: {len(text)} символов\n")
+                debug_file.write(f"Режим: {env}\n")
+                debug_file.write("="*60 + "\n\n")
+                debug_file.write(text)
+            print(f"[DEBUG] Текст сохранен в {debug_filename}")
+        except Exception as debug_error:
+            print(f"[ERROR] Не удалось сохранить debug файл: {debug_error}")
 
     # 3. Определяем тип документа
     doc_type = detect_document_type(text)
