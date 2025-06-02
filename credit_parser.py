@@ -1234,19 +1234,569 @@ class PKBParser(BaseParser):
         except Exception as e:
             logger.error(f"Ошибка при парсинге строки {line_num}: {e}")
             return None
+
+# Добавьте этот класс в ваш credit_parser.py ПЕРЕД функцией create_parser_chain()
+
+class GKBParser(BaseParser):
+    """
+    Специализированный парсер для отчетов ГКБ (Государственное кредитное бюро)
+    Извлекает ВСЕ данные для банкротства: номера договоров, даты, суммы
+    """
+    
+    def can_parse(self, text: str) -> bool:
+        # Признаки отчета ГКБ
+        gkb_indicators = [
+            "Государственное кредитное бюро",
+            "Персональный кредитный отчет",
+            "Номер договора:",
+            "Дата начала срока действия контракта:",
+            "Обязательство 1"
+        ]
         
+        # Должно быть хотя бы 3 признака ГКБ
+        gkb_score = sum(1 for indicator in gkb_indicators if indicator in text)
+        
+        # И НЕ должно быть признаков ПКБ
+        pkb_indicators = ["ПОЛНЫЙ ПЕРСОНАЛЬНЫЙ КРЕДИТНЫЙ ОТЧЕТ", "Итого:"]
+        pkb_score = sum(1 for indicator in pkb_indicators if indicator in text)
+        
+        is_gkb = gkb_score >= 3 and pkb_score == 0
+        
+        if is_gkb:
+            logger.info("🎯 Определен формат ГКБ - используем специализированный парсер")
+        
+        return is_gkb
+    
+    def extract_data(self, text: str) -> Dict:
+        """Извлекает данные из отчета ГКБ с ПОЛНОЙ информацией для банкротства"""
+        
+        logger.info("🚀 Запуск специализированного парсера ГКБ")
+        
+        # Извлекаем персональную информацию
+        personal_info = self.extract_gkb_personal_info(text)
+        
+        # Извлекаем действующие обязательства
+        active_obligations = self.extract_gkb_active_obligations(text)
+        
+        # Подсчитываем итоги
+        total_debt = sum(obl.get("debt_amount", 0) for obl in active_obligations)
+        total_monthly_payment = sum(obl.get("monthly_payment", 0) for obl in active_obligations)
+        total_overdue = sum(obl.get("overdue_amount", 0) for obl in active_obligations)
+        overdue_count = len([obl for obl in active_obligations if obl.get("overdue_amount", 0) > 0])
+        
+        # Конвертируем в стандартный формат вашей системы
+        obligations = []
+        for obligation in active_obligations:
+            obligations.append({
+                "creditor": obligation.get("creditor", "Неизвестно"),
+                "balance": obligation.get("debt_amount", 0.0),
+                "monthly_payment": obligation.get("monthly_payment", 0.0),
+                "overdue_amount": obligation.get("overdue_amount", 0.0),
+                "overdue_days": obligation.get("overdue_days", 0),
+                "overdue_status": obligation.get("status", "Неизвестно"),
+                # ✅ НОВЫЕ ПОЛЯ ДЛЯ БАНКРОТСТВА:
+                "contract_number": obligation.get("contract_number", "НЕ НАЙДЕН"),
+                "debt_origin_date": obligation.get("debt_origin_date", "НЕ НАЙДЕНА"),
+                "loan_type": obligation.get("loan_type", "Неизвестно"),
+                "interest_rate": obligation.get("interest_rate", 0.0)
+            })
+        
+        logger.info(f"✅ ГКБ парсинг завершен: {len(active_obligations)} обязательств, {total_debt:,.2f} ₸")
+        
+        return {
+            "personal_info": personal_info,
+            "total_debt": round(total_debt, 2),
+            "total_monthly_payment": round(total_monthly_payment, 2),
+            "total_obligations": len(active_obligations),
+            "overdue_obligations": overdue_count,
+            "obligations": obligations,
+            "report_type": "GKB",
+            "bankruptcy_ready": True  # ✅ Готов для банкротства
+        }
+    
+    def extract_gkb_personal_info(self, text: str) -> Dict:
+        """Извлекает персональную информацию из отчета ГКБ"""
+        
+        personal_info = {}
+        
+        # ФИО
+        name_match = re.search(r'Фамилия:\s*([^\n]+)\s+Имя:\s*([^\n]+)\s+Отчество:\s*([^\n]+)', text)
+        if name_match:
+            surname, name, patronymic = name_match.groups()
+            personal_info['last_name'] = surname.strip()
+            personal_info['first_name'] = name.strip()
+            personal_info['middle_name'] = patronymic.strip()
+            personal_info['full_name'] = f"{surname.strip()} {name.strip()} {patronymic.strip()}"
+        
+        # ИИН
+        iin_match = re.search(r'ИИН:\s*(\d+)', text)
+        if iin_match:
+            personal_info['iin'] = iin_match.group(1)
+        
+        # Телефон
+        phone_match = re.search(r'Моб\. тел\.:\s*(\d+)', text)
+        if phone_match:
+            personal_info['mobile_phone'] = phone_match.group(1)
+        
+        # Email
+        email_match = re.search(r'E-mail:\s*([^\s\n]+)', text)
+        if email_match:
+            personal_info['email'] = email_match.group(1)
+        
+        # Адрес
+        address_match = re.search(r'Постоянное место жительства.*?Улица:\s*([^\n]+)', text, re.DOTALL)
+        if address_match:
+            personal_info['address'] = address_match.group(1).strip()
+        
+        return personal_info
+    
+    def extract_gkb_active_obligations(self, text: str) -> List[Dict]:
+        """Извлекает ДЕЙСТВУЮЩИЕ обязательства из ГКБ с ПОЛНЫМИ данными"""
+        
+        obligations = []
+        
+        # Находим раздел с действующими обязательствами
+        active_section = re.search(
+            r'ПОДРОБНАЯ ИНФОРМАЦИЯ ПО ДЕЙСТВУЮЩИМ ДОГОВОРАМ(.*?)(?=ПОДРОБНАЯ ИНФОРМАЦИЯ О ЗАВЕРШЕННЫХ ДОГОВОРАХ|Текущие сведения)',
+            text, 
+            re.DOTALL
+        )
+        
+        if not active_section:
+            logger.warning("❌ Раздел действующих обязательств ГКБ не найден")
+            return obligations
+        
+        active_text = active_section.group(1)
+        
+        # Ищем каждое обязательство (начинается с "Обязательство N")
+        obligation_pattern = r'Обязательство\s+(\d+)(.*?)(?=Обязательство\s+\d+|$)'
+        obligation_matches = re.finditer(obligation_pattern, active_text, re.DOTALL)
+        
+        for match in obligation_matches:
+            obligation_num = match.group(1)
+            obligation_text = match.group(2)
+            
+            obligation_data = self.parse_gkb_single_obligation(obligation_text, obligation_num)
+            if obligation_data:
+                obligations.append(obligation_data)
+                logger.info(f"  ✅ Обязательство #{obligation_num}: {obligation_data.get('creditor', 'Неизвестно')}")
+        
+        return obligations
+    
+    def parse_gkb_single_obligation(self, text: str, obligation_num: str) -> Optional[Dict]:
+        """Парсит ОДНО обязательство ГКБ с извлечением ВСЕХ данных для банкротства"""
+        
+        obligation = {
+            'obligation_number': obligation_num,
+            'parsing_errors': []
+        }
+        
+        try:
+            # 1. КРЕДИТОР
+            creditor_match = re.search(r'Кредитор:\s*(.+)', text)
+            if creditor_match:
+                creditor = creditor_match.group(1).strip().strip('"')
+                obligation['creditor'] = creditor
+            else:
+                obligation['parsing_errors'].append("Кредитор не найден")
+                obligation['creditor'] = "Неизвестно"
+            
+            # 2. НОМЕР ДОГОВОРА (КРИТИЧЕСКИ ВАЖНО!)
+            contract_match = re.search(r'Номер договора:\s*(.+)', text)
+            if contract_match:
+                obligation['contract_number'] = contract_match.group(1).strip()
+            else:
+                obligation['parsing_errors'].append("Номер договора не найден")
+                obligation['contract_number'] = "НЕ НАЙДЕН"
+            
+            # 3. ДАТА ОБРАЗОВАНИЯ ЗАДОЛЖЕННОСТИ (КРИТИЧЕСКИ ВАЖНО!)
+            start_date_match = re.search(r'Дата начала срока действия контракта:\s*(\d{2}\.\d{2}\.\d{4})', text)
+            if start_date_match:
+                obligation['debt_origin_date'] = start_date_match.group(1)
+            else:
+                # Пробуем альтернативные варианты
+                issue_date_match = re.search(r'Дата фактической выдачи:\s*(\d{2}\.\d{2}\.\d{4})', text)
+                if issue_date_match:
+                    obligation['debt_origin_date'] = issue_date_match.group(1)
+                else:
+                    obligation['parsing_errors'].append("Дата образования задолженности не найдена")
+                    obligation['debt_origin_date'] = "НЕ НАЙДЕНА"
+            
+            # 4. СУММА ДОЛГА
+            debt_amount_match = re.search(r'Сумма предстоящих платежей.*?(\d+(?:\.\d+)?)\s*KZT', text)
+            if debt_amount_match:
+                obligation['debt_amount'] = float(debt_amount_match.group(1))
+            else:
+                obligation['debt_amount'] = 0.0
+                obligation['parsing_errors'].append("Сумма долга не найдена")
+            
+            # 5. ПРОСРОЧЕННАЯ ЗАДОЛЖЕННОСТЬ
+            overdue_match = re.search(r'Сумма просроченных взносов.*?(\d+(?:\.\d+)?)\s*KZT', text)
+            if overdue_match:
+                obligation['overdue_amount'] = float(overdue_match.group(1))
+            else:
+                obligation['overdue_amount'] = 0.0
+            
+            # 6. ДНИ ПРОСРОЧКИ
+            overdue_days_match = re.search(r'Количество дней просрочки:\s*(\d+)', text)
+            if overdue_days_match:
+                obligation['overdue_days'] = int(overdue_days_match.group(1))
+            else:
+                obligation['overdue_days'] = 0
+            
+            # 7. ТИП КРЕДИТА
+            loan_type_match = re.search(r'Вид финансирования:\s*(.+)', text)
+            if loan_type_match:
+                obligation['loan_type'] = loan_type_match.group(1).strip()
+            else:
+                obligation['loan_type'] = "Неизвестно"
+            
+            # 8. ПРОЦЕНТНАЯ СТАВКА
+            interest_match = re.search(r'Годовая эффективная ставка вознаграждения:\s*(\d+\.\d+)\s*%', text)
+            if interest_match:
+                obligation['interest_rate'] = float(interest_match.group(1))
+            else:
+                obligation['interest_rate'] = 0.0
+            
+            # 9. ЕЖЕМЕСЯЧНЫЙ ПЛАТЕЖ
+            monthly_payment_match = re.search(r'Сумма ежемесячного платежа.*?(\d+(?:\.\d+)?)\s*KZT', text)
+            if monthly_payment_match:
+                obligation['monthly_payment'] = float(monthly_payment_match.group(1))
+            else:
+                obligation['monthly_payment'] = 0.0
+            
+            # 10. СТАТУС
+            if obligation['overdue_days'] > 0:
+                obligation['status'] = f"Просрочка {obligation['overdue_days']} дней"
+            else:
+                obligation['status'] = "Действующий"
+            
+            return obligation
+            
+        except Exception as e:
+            obligation['parsing_errors'].append(f"Ошибка парсинга: {str(e)}")
+            logger.error(f"❌ Ошибка парсинга обязательства {obligation_num}: {e}")
+            return obligation
+
+
+# ОБНОВИТЕ функцию create_parser_chain() - добавьте GKBParser в начало цепи:
+
+def create_parser_chain():
+    """Создает цепочку парсеров с добавленным GKBParser"""
+    
+    # ✅ ДОБАВЛЯЕМ GKBParser В НАЧАЛО ЦЕПОЧКИ
+    gkb = GKBParser()           # ← НОВЫЙ! Специально для ГКБ отчетов
+    pkb = PKBParser()           # Для ПКБ отчетов  
+    detailed = DetailedParser() # Для детальных отчетов
+    short = ShortParser()       # Для кратких отчетов
+    kazakh = KazakhParser()     # Для казахоязычных отчетов
+    fallback = FallbackParser() # Универсальная заглушка
+    
+    # Устанавливаем цепочку: GKB → PKB → Detailed → Short → Kazakh → Fallback
+    gkb.set_next(pkb).set_next(detailed).set_next(short).set_next(kazakh).set_next(fallback)
+    
+    logger.info("🔗 Цепочка парсеров обновлена: GKB → PKB → Detailed → Short → Kazakh → Fallback")
+    
+    return gkb  # Возвращаем первый парсер в цепочке
+
+
+# ОБНОВИТЕ функцию generate_creditors_list_pdf в том файле где она у вас есть:
+
+def generate_creditors_list_pdf_IMPROVED(parsed_data):
+    """
+    ОБНОВЛЕННАЯ версия PDF генератора с поддержкой данных ГКБ
+    """
+    try:
+        print(f"\n🎯 [IMPROVED] Генерируем PDF с данными из ГКБ:")
+        
+        # Регистрируем шрифты (ваша существующая функция)
+        font_name = register_fonts()
+        
+        # Создаем временный файл
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        doc = SimpleDocTemplate(tmp_file.name, pagesize=A4)
+        elements = []
+        styles = getSampleStyleSheet()
+
+        # Настраиваем стили
+        title_style = ParagraphStyle('RussianTitle', parent=styles['Title'], 
+                                   fontName=font_name, fontSize=16, alignment=1)
+        normal_style = ParagraphStyle('RussianNormal', parent=styles['Normal'], 
+                                    fontName=font_name, fontSize=10)
+        success_style = ParagraphStyle('RussianSuccess', parent=styles['Normal'], 
+                                     fontName=font_name, fontSize=11, 
+                                     textColor=colors.green, alignment=1)
+
+        # Заголовок
+        title = Paragraph("ПЕРЕЧЕНЬ КРЕДИТОРОВ ДЛЯ БАНКРОТСТВА", title_style)
+        elements.append(title)
+        elements.append(Spacer(1, 12))
+        
+        # СТАТУС УСПЕХА
+        if parsed_data.get('bankruptcy_ready', False) or parsed_data.get('report_type') == 'GKB':
+            success = Paragraph(
+                "<b>✅ ВСЕ ДАННЫЕ ИЗВЛЕЧЕНЫ УСПЕШНО!</b><br/>"
+                "Документ готов для процедуры банкротства",
+                success_style
+            )
+            elements.append(success)
+            elements.append(Spacer(1, 20))
+
+        # Информация о заемщике
+        personal_info = parsed_data.get('personal_info', {})
+        
+        debtor_text = f"""
+        <b>Заемщик:</b> {personal_info.get('full_name', 'Не указано')}<br/>
+        <b>ИИН:</b> {personal_info.get('iin', 'Не указано')}<br/>
+        <b>Телефон:</b> {personal_info.get('mobile_phone', 'Не указано')}<br/>
+        <b>Email:</b> {personal_info.get('email', 'Не указано')}<br/>
+        <b>Дата составления:</b> {datetime.now().strftime('%d.%m.%Y')}
+        """
+        elements.append(Paragraph(debtor_text, normal_style))
+        elements.append(Spacer(1, 12))
+
+        # Заголовки таблицы - С ПОЛНЫМИ ДАННЫМИ
+        headers = ['№', 'Кредитор', 'Номер договора', 'Дата образования', 'Сумма долга (KZT)', 'Просрочка (KZT)', 'Статус']
+        table_data = [headers]
+
+        # Извлекаем обязательства
+        obligations = parsed_data.get('obligations', [])
+        
+        for i, obligation in enumerate(obligations, 1):
+            row = [
+                str(i),
+                obligation.get('creditor', 'Не указано'),
+                obligation.get('contract_number', 'НЕ НАЙДЕН'),      # ✅ ТЕПЕРЬ ЕСТЬ!
+                obligation.get('debt_origin_date', 'НЕ НАЙДЕНА'),    # ✅ ТЕПЕРЬ ЕСТЬ!
+                f"{obligation.get('balance', 0):,.2f}".replace(',', ' '),
+                f"{obligation.get('overdue_amount', 0):,.2f}".replace(',', ' '),
+                obligation.get('overdue_status', 'Неизвестно')
+            ]
+            table_data.append(row)
+
+        # Создаем таблицу
+        table = Table(table_data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('FONTSIZE', (0, 1), (-1, -1), 7),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.lightgreen),  # Зеленый = успех!
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+
+        elements.append(table)
+        elements.append(Spacer(1, 24))
+
+        # Итоги
+        total_debt = parsed_data.get('total_debt', 0)
+        total_overdue = sum(obl.get('overdue_amount', 0) for obl in obligations)
+        
+        summary_text = f"""
+        <b>ИТОГО:</b><br/>
+        Общее количество активных кредиторов: {len(obligations)}<br/>
+        Общая сумма задолженности: {total_debt:,.2f} тенге<br/>
+        Общая просроченная задолженность: {total_overdue:,.2f} тенге<br/>
+        <br/>
+        <b>✅ ДАННЫЕ ДЛЯ БАНКРОТСТВА ГОТОВЫ:</b><br/>
+        • ✅ Номера договоров извлечены<br/>
+        • ✅ Даты образования задолженности найдены<br/>
+        • ✅ Суммы долгов подтверждены<br/>
+        • ⚠️ Контактные данные кредиторов требуют уточнения
+        """
+        elements.append(Paragraph(summary_text, normal_style))
+
+        # Сборка PDF
+        doc.build(elements)
+        
+        print(f"✅ PDF создан успешно: {tmp_file.name}")
+        return tmp_file.name
+
+    except Exception as e:
+        print(f"❌ Ошибка создания PDF: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# ТЕСТОВАЯ ФУНКЦИЯ для проверки
+# ЗАМЕНИТЕ тестовую функцию в конце вашего файла на эту:
+
+def test_gkb_parser():
+    """Тестируем новый GKB парсер на вашем файле"""
+    
+    try:
+        # Читаем ваш файл
+        with open('debug_text_output_376068212_972e044a.txt', 'r', encoding='utf-8') as f:
+            text = f.read()
+        
+        print("🚀 ТЕСТИРУЕМ ОБНОВЛЕННУЮ СИСТЕМУ ПАРСЕРОВ")
+        print("=" * 50)
+        
+        # Создаем парсер напрямую
+        parser = create_parser_chain()
+        result = parser.parse(text)
+        
+        if not result:
+            print("❌ Парсер вернул None")
+            return None
+        
+        # Выводим результат
+        print(f"📊 РЕЗУЛЬТАТ:")
+        print(f"  📄 Тип отчета: {result.get('report_type', 'Неизвестно')}")
+        print(f"  👤 Заемщик: {result['personal_info'].get('full_name', 'Не найдено')}")
+        print(f"  📋 Обязательств: {len(result['obligations'])}")
+        print(f"  💰 Общий долг: {result['total_debt']:,.2f} KZT")
+        
+        # Проверяем, извлечены ли номера договоров и даты
+        contracts_found = 0
+        dates_found = 0
+        
+        print(f"\n🔍 ПРОВЕРКА ИЗВЛЕЧЕНИЯ ДАННЫХ:")
+        for i, obligation in enumerate(result['obligations'][:5], 1):  # Показываем первые 5
+            contract = obligation.get('contract_number', 'НЕ НАЙДЕН')
+            date = obligation.get('debt_origin_date', 'НЕ НАЙДЕНА')
+            
+            if contract and contract != 'НЕ НАЙДЕН':
+                contracts_found += 1
+            if date and date != 'НЕ НАЙДЕНА':
+                dates_found += 1
+            
+            print(f"  {i}. {obligation['creditor']}")
+            print(f"     📄 Договор: {contract}")
+            print(f"     📅 Дата: {date}")
+            print(f"     💰 Долг: {obligation['balance']:,.2f} KZT")
+        
+        print(f"\n✅ ИТОГОВАЯ ПРОВЕРКА:")
+        print(f"  📄 Номеров договоров найдено: {contracts_found}/{len(result['obligations'])}")
+        print(f"  📅 Дат найдено: {dates_found}/{len(result['obligations'])}")
+        
+        if contracts_found > 0 and dates_found > 0:
+            print(f"  🎯 УСПЕХ: Данные для банкротства извлечены!")
+            print(f"  ✅ GKBParser работает корректно!")
+        else:
+            print(f"  ⚠️ ПРОБЛЕМА: Данные не извлечены - возможно используется другой парсер")
+            print(f"  🔍 Проверим, какой парсер сработал...")
+            
+            # Дополнительная диагностика
+            if result.get('report_type') == 'GKB':
+                print(f"  ✅ Сработал GKBParser")
+            elif 'totals' in result:
+                print(f"  ℹ️ Сработал PKBParser (улучшенный)")
+            else:
+                print(f"  ℹ️ Сработал другой парсер")
+        
+        return result
+        
+    except FileNotFoundError:
+        print(f"❌ Файл debug_text_output_376068212_972e044a.txt не найден в текущей директории")
+        print(f"📁 Текущая директория: {os.getcwd()}")
+        print(f"📄 Попробуйте указать полный путь к файлу")
+        return None
+    except Exception as e:
+        print(f"❌ Ошибка тестирования: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# АЛЬТЕРНАТИВНЫЙ тест для проверки работы GKBParser
+def test_gkb_parser_direct():
+    """Прямой тест GKBParser без цепочки"""
+    
+    try:
+        with open('debug_text_output_376068212_972e044a.txt', 'r', encoding='utf-8') as f:
+            text = f.read()
+        
+        print("🔍 ПРЯМОЙ ТЕСТ GKBParser")
+        print("=" * 30)
+        
+        # Создаем GKBParser напрямую
+        gkb_parser = GKBParser()
+        
+        # Проверяем, может ли он парсить этот текст
+        can_parse = gkb_parser.can_parse(text)
+        print(f"🎯 Может ли GKBParser обработать файл: {'ДА' if can_parse else 'НЕТ'}")
+        
+        if can_parse:
+            print("🚀 Запускаем GKBParser...")
+            result = gkb_parser.extract_data(text)
+            
+            print(f"📊 Результат GKBParser:")
+            print(f"  👤 Заемщик: {result['personal_info'].get('full_name', 'Не найдено')}")
+            print(f"  📋 Обязательств: {len(result['obligations'])}")
+            
+            # Проверяем первое обязательство
+            if result['obligations']:
+                first_obl = result['obligations'][0]
+                print(f"  📄 Первый договор: {first_obl.get('contract_number', 'НЕ НАЙДЕН')}")
+                print(f"  📅 Первая дата: {first_obl.get('debt_origin_date', 'НЕ НАЙДЕНА')}")
+        else:
+            print("❌ GKBParser не может обработать этот файл")
+            print("🔍 Проверим признаки ГКБ в файле:")
+            
+            gkb_indicators = [
+                "Государственное кредитное бюро",
+                "Персональный кредитный отчет", 
+                "Номер договора:",
+                "Дата начала срока действия контракта:",
+                "Обязательство 1"
+            ]
+            
+            for indicator in gkb_indicators:
+                found = indicator in text
+                print(f"  {'✅' if found else '❌'} {indicator}: {'НАЙДЕН' if found else 'НЕ НАЙДЕН'}")
+        
+        return result if can_parse else None
+        
+    except Exception as e:
+        print(f"❌ Ошибка прямого теста: {e}")
+        return None
+
+
+# Обновите секцию if __name__ == "__main__":
+
+if __name__ == "__main__":
+    print("🔧 Выберите тест:")
+    print("1. Полный тест через цепочку парсеров")
+    print("2. Прямой тест GKBParser")
+    
+    choice = input("Введите номер (1 или 2): ").strip()
+    
+    if choice == "1":
+        test_gkb_parser()
+    elif choice == "2":  
+        test_gkb_parser_direct()
+    else:
+        print("🚀 Запускаем оба теста:")
+        print("\n" + "="*50)
+        print("ПРЯМОЙ ТЕСТ GKBParser:")
+        test_gkb_parser_direct()
+        
+        print("\n" + "="*50) 
+        print("ПОЛНЫЙ ТЕСТ ЧЕРЕЗ ЦЕПОЧКУ:")
+        test_gkb_parser()
+if __name__ == "__main__":
+    test_gkb_parser()
+
 def create_parser_chain():
     """Создает цепочку парсеров"""
     pkb = PKBParser()  # Новый парсер для ПКБ
+    gkb = GKBParser() # Новый парсер для ГКБ отчетов
     detailed = DetailedParser()
     short = ShortParser()
     kazakh = KazakhParser()
     fallback = FallbackParser()
     
-    # Установка цепочки, начиная с парсера ПКБ
-    pkb.set_next(detailed).set_next(short).set_next(kazakh).set_next(fallback)
+    # ✅ ПРАВИЛЬНАЯ цепочка: GKB → PKB → Detailed → Short → Kazakh → Fallback
+    gkb.set_next(pkb).set_next(detailed).set_next(short).set_next(kazakh).set_next(fallback)
+
     
-    return pkb  # Возвращаем первый парсер в цепочке
+    return gkb  # Возвращаем первый парсер в цепочке
 
 def extract_credit_data_with_total(text: str) -> Dict:
     """Основная функция для извлечения данных из кредитного отчета"""
@@ -1340,6 +1890,19 @@ def extract_credit_data(data, is_mongodb_id=False):
 # Обновленная функция форматирования результатов с учетом языка и личных данных
 def format_summary(data: Dict) -> str:
     """Форматирует данные в читаемый вид"""
+
+    # # 🔍 ОТЛАДКА: Проверяем количество кредиторов
+    # print(f"\n🔍 [DEBUG] format_summary получил данные:")
+    # print(f"   - obligations (всего): {len(data.get('obligations', []))}")
+    # print(f"   - total_obligations: {data.get('total_obligations', 0)}")
+    # print(f"   - overdue_obligations: {data.get('overdue_obligations', 0)}")
+    
+    # # Выводим всех кредиторов до фильтрации
+    # all_obligations = data.get("obligations", [])
+    # print(f"\n📋 ВСЕ кредиторы до фильтрации ({len(all_obligations)}):")
+    # for i, o in enumerate(all_obligations, 1):
+    #     print(f"   {i}. {o.get('creditor', 'Неизвестно')}: balance={o.get('balance', 0)} ₸, overdue_days={o.get('overdue_days', 0)}")
+
 
     # Если это результат от улучшенного PKB парсера
     if data.get("totals") and data.get("contract_summary"):

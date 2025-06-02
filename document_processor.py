@@ -8,6 +8,7 @@ from ocr import ocr_file, detect_document_type
 from credit_parser import extract_credit_data_with_total, format_summary
 from dotenv import load_dotenv
 import hashlib
+from credit_parser import create_parser_chain, extract_collateral_info
 
 load_dotenv()  # Подгружаем .env переменные
 
@@ -63,7 +64,10 @@ def process_uploaded_file(filepath, user_id):
     # 4. Обрабатываем кредитный отчёт
     if doc_type == "credit_report":
         # Парсим отчет
-        parsed = extract_credit_data_with_total(text)
+        parser = create_parser_chain()
+        parsed = parser.parse(text)
+        if parsed:
+            parsed["collaterals"] = extract_collateral_info(text)
         
         # 🔍 ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО ИИН
         iin = parsed.get("personal_info", {}).get("iin")

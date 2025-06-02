@@ -7,6 +7,12 @@ from reportlab.pdfbase.ttfonts import TTFont
 from datetime import datetime
 import tempfile
 import os
+from reportlab.lib.styles import ParagraphStyle
+import re
+
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 
 # Регистрируем шрифт для русского текста
 def register_fonts():
@@ -208,6 +214,274 @@ def generate_credit_application_pdf(personal_info, creditor_data, total_debt):
         except:
             pass
 
+def extract_contract_details(description):
+    """
+    Извлекает номер договора и дату из строки вида "Договор №123456 от 01.01.2022"
+    """
+    match = re.search(r'Договор\s+№(\d+)\s+от\s+(\d{2}\.\d{2}\.\d{4})', description)
+    if match:
+        return match.group(1), match.group(2)
+    return '—', '—'
+
+def generate_creditors_list_pdf(parsed_data):
+    """
+    ОБНОВЛЕННАЯ версия - использует данные от GKBParser
+    """
+    try:
+        print(f"\n🎯 [UPDATED] Создание PDF с полными данными:")
+        print(f"   📋 Ключи parsed_data: {list(parsed_data.keys())}")
+        print(f"   📄 report_type: {parsed_data.get('report_type')}")
+        print(f"   🎯 bankruptcy_ready: {parsed_data.get('bankruptcy_ready')}")
+        print(f"   📊 Количество obligations: {len(parsed_data.get('obligations', []))}")
+        
+        # Проверяем первое обязательство
+        obligations = parsed_data.get('obligations', [])
+        if obligations:
+            first_obl = obligations[0]
+            print(f"   🔍 Поля первого обязательства: {list(first_obl.keys())}")
+            print(f"   📄 contract_number: {first_obl.get('contract_number', 'ОТСУТСТВУЕТ')}")
+            print(f"   📅 debt_origin_date: {first_obl.get('debt_origin_date', 'ОТСУТСТВУЕТ')}")
+        
+        
+        # Проверяем, есть ли данные от GKBParser
+        is_gkb_data = parsed_data.get('report_type') == 'GKB' or parsed_data.get('bankruptcy_ready', False)
+        total_contracts_with_data = 0
+        total_dates_with_data = 0
+        
+        # Подсчитываем, сколько данных у нас есть
+        obligations = parsed_data.get('obligations', [])
+        for obl in obligations:
+            contract_number = obl.get('contract_number', 'НЕ НАЙДЕН')
+            debt_origin_date = obl.get('debt_origin_date', 'НЕ НАЙДЕНА')
+            
+            if contract_number and contract_number != 'НЕ НАЙДЕН':
+                total_contracts_with_data += 1
+            if debt_origin_date and debt_origin_date != 'НЕ НАЙДЕНА':
+                total_dates_with_data += 1
+        
+        print(f"   📄 Номера договоров: {total_contracts_with_data}/{len(obligations)}")
+        print(f"   📅 Даты образования: {total_dates_with_data}/{len(obligations)}")
+        
+        # Определяем статус готовности
+        is_bankruptcy_ready = (total_contracts_with_data > 0 and total_dates_with_data > 0)
+        
+        # РЕГИСТРИРУЕМ РУССКИЕ ШРИФТЫ
+        font_name = register_fonts()
+        
+        # Создаем временный файл
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        doc = SimpleDocTemplate(tmp_file.name, pagesize=A4)
+        elements = []
+        styles = getSampleStyleSheet()
+
+        # НАСТРАИВАЕМ СТИЛИ ДЛЯ РУССКОГО ШРИФТА
+        title_style = ParagraphStyle(
+            'RussianTitle',
+            parent=styles['Title'],
+            fontName=font_name,
+            fontSize=16,
+            alignment=1  # CENTER
+        )
+        
+        normal_style = ParagraphStyle(
+            'RussianNormal', 
+            parent=styles['Normal'],
+            fontName=font_name,
+            fontSize=10
+        )
+        
+        # Стиль в зависимости от готовности данных
+        if is_bankruptcy_ready:
+            status_style = ParagraphStyle(
+                'RussianSuccess',
+                parent=styles['Normal'],
+                fontName=font_name,
+                fontSize=11,
+                textColor=colors.green,
+                alignment=1
+            )
+        else:
+            status_style = ParagraphStyle(
+                'RussianWarning',
+                parent=styles['Normal'],
+                fontName=font_name,
+                fontSize=11,
+                textColor=colors.red,
+                alignment=1
+            )
+
+        # Заголовок документа
+        title = Paragraph("ПЕРЕЧЕНЬ КРЕДИТОРОВ И ДЕБИТОРОВ", title_style)
+        elements.append(title)
+        elements.append(Spacer(1, 12))
+        
+        # СТАТУС В ЗАВИСИМОСТИ ОТ ГОТОВНОСТИ ДАННЫХ
+        if is_bankruptcy_ready:
+            status_text = (
+                "<b>✅ ДАННЫЕ ДЛЯ БАНКРОТСТВА ГОТОВЫ!</b><br/>"
+                f"Извлечено {total_contracts_with_data} номеров договоров и {total_dates_with_data} дат.<br/>"
+                "Документ готов для подачи заявления о банкротстве."
+            )
+        else:
+            status_text = (
+                "<b>⚠️ ВНИМАНИЕ: НЕПОЛНЫЕ ДАННЫЕ</b><br/>"
+                "Парсер не смог извлечь все данные из кредитного отчета.<br/>"
+                "Некоторые номера договоров и даты нужно добавить вручную!"
+            )
+        
+        status = Paragraph(status_text, status_style)
+        elements.append(status)
+        elements.append(Spacer(1, 20))
+
+        # Информация о заемщике
+        personal_info = parsed_data.get('personal_info', {})
+        
+        name = (personal_info.get('full_name') or 
+                personal_info.get('name') or 
+                'Не указано')
+        
+        iin = (personal_info.get('iin') or 
+               'Не указано')
+        
+        phone = personal_info.get('mobile_phone', 'Не указано')
+        email = personal_info.get('email', 'Не указано')
+
+        debtor_text = f"""
+        <b>Заемщик:</b> {name}<br/>
+        <b>ИИН:</b> {iin}<br/>
+        <b>Телефон:</b> {phone}<br/>
+        <b>Email:</b> {email}<br/>
+        <b>Дата составления:</b> {datetime.now().strftime('%d.%m.%Y')}
+        """
+        elements.append(Paragraph(debtor_text, normal_style))
+        elements.append(Spacer(1, 12))
+
+        # Заголовки таблицы
+        headers = ['№', 'Кредитор', 'Сумма долга (тенге)', 'Дата образования', 'Номер договора', 'Статус']
+        table_data = [headers]
+
+        # Извлекаем данные с РЕАЛЬНЫМИ значениями
+        total_debt = 0
+        active_creditors = 0
+        
+        for i, obligation in enumerate(obligations, 1):
+            creditor_name = obligation.get('creditor', 'Не указано').strip('"')
+            debt_amount = obligation.get('balance', 0)
+            overdue_status = obligation.get('overdue_status', 'Стандартные кредиты')
+            
+            # ✅ НОВЫЕ ПОЛЯ ОТ GKBParser:
+            contract_number = obligation.get('contract_number', 'НЕ ИЗВЛЕЧЕНО')
+            debt_origin_date = obligation.get('debt_origin_date', 'НЕ ИЗВЛЕЧЕНО')
+            
+            if debt_amount > 0:
+                total_debt += debt_amount
+                active_creditors += 1
+
+            row = [
+                str(i),
+                creditor_name,
+                f"{debt_amount:,.2f}".replace(',', ' '),
+                debt_origin_date,    # ✅ ТЕПЕРЬ РЕАЛЬНАЯ ДАТА ИЛИ "НЕ ИЗВЛЕЧЕНО"
+                contract_number,     # ✅ ТЕПЕРЬ РЕАЛЬНЫЙ НОМЕР ИЛИ "НЕ ИЗВЛЕЧЕНО"
+                overdue_status
+            ]
+            table_data.append(row)
+
+        # СОЗДАЕМ ТАБЛИЦУ
+        table = Table(table_data, repeatRows=1)
+        
+        # Стиль таблицы в зависимости от готовности данных
+        if is_bankruptcy_ready:
+            table_bg_color = colors.lightgreen  # Зеленый = готово
+            missing_data_color = colors.black
+        else:
+            table_bg_color = colors.beige       # Бежевый = не готово
+            missing_data_color = colors.red     # Красный для отсутствующих данных
+        
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('FONTSIZE', (0, 1), (-1, -1), 7),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), table_bg_color),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        
+        # Выделяем красным только ячейки с "НЕ ИЗВЛЕЧЕНО"
+        for row_idx in range(1, len(table_data)):
+            # Проверяем дату образования (колонка 3)
+            if table_data[row_idx][3] == "НЕ ИЗВЛЕЧЕНО":
+                table.setStyle(TableStyle([
+                    ('TEXTCOLOR', (3, row_idx), (3, row_idx), missing_data_color),
+                ]))
+            
+            # Проверяем номер договора (колонка 4)
+            if table_data[row_idx][4] == "НЕ ИЗВЛЕЧЕНО":
+                table.setStyle(TableStyle([
+                    ('TEXTCOLOR', (4, row_idx), (4, row_idx), missing_data_color),
+                ]))
+
+        elements.append(table)
+        elements.append(Spacer(1, 24))
+
+        # Итоги в зависимости от готовности данных
+        if is_bankruptcy_ready:
+            summary_text = f"""
+            <b>ИТОГО:</b><br/>
+            Общее количество кредиторов: {active_creditors}<br/>
+            Общая сумма задолженности: {total_debt:,.2f} тенге<br/>
+            <br/>
+            <b>✅ ДАННЫЕ ДЛЯ БАНКРОТСТВА ГОТОВЫ:</b><br/>
+            • ✅ Номера договоров извлечены ({total_contracts_with_data}/{len(obligations)})<br/>
+            • ✅ Даты образования найдены ({total_dates_with_data}/{len(obligations)})<br/>
+            • ✅ Суммы задолженности подтверждены<br/>
+            • ⚠️ Контактные данные кредиторов требуют дополнительного уточнения<br/>
+            <br/>
+            <b>📋 ГОТОВО К ПОДАЧЕ:</b><br/>
+            Документ содержит все необходимые данные для заявления о банкротстве<br/>
+            согласно требованиям законодательства РК.
+            """
+        else:
+            missing_contracts = len(obligations) - total_contracts_with_data  
+            missing_dates = len(obligations) - total_dates_with_data
+            
+            summary_text = f"""
+            <b>ИТОГО:</b><br/>
+            Общее количество кредиторов: {active_creditors}<br/>
+            Общая сумма задолженности: {total_debt:,.2f} тенге<br/>
+            <br/>
+            <b>❌ ОТСУТСТВУЮЩИЕ ДАННЫЕ ДЛЯ БАНКРОТСТВА:</b><br/>
+            • Номера договоров: отсутствует {missing_contracts}<br/>
+            • Даты образования: отсутствует {missing_dates}<br/>
+            • Контактные данные кредиторов<br/>
+            <br/>
+            <b>💡 ДЕЙСТВИЯ:</b><br/>
+            1. Запросить справки из банков с номерами договоров<br/>
+            2. Уточнить даты образования задолженности<br/>
+            3. Получить контактные данные кредиторов<br/>
+            4. Обновить данные в системе
+            """
+        
+        elements.append(Paragraph(summary_text, normal_style))
+
+        # Сборка PDF
+        doc.build(elements)
+        
+        print(f"✅ PDF создан: {tmp_file.name}")
+        print(f"   Статус готовности: {'ГОТОВ К БАНКРОТСТВУ' if is_bankruptcy_ready else 'ТРЕБУЕТ ДОРАБОТКИ'}")
+        
+        return tmp_file.name
+
+    except Exception as e:
+        print(f"[ERROR] Не удалось создать PDF: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+          
 def generate_applications_for_all_creditors(parsed_data):
     """
     Генерирует заявления для всех кредиторов из отчета
@@ -223,6 +497,29 @@ def generate_applications_for_all_creditors(parsed_data):
     obligations = parsed_data.get('obligations', [])
     total_debt = parsed_data.get('total_debt', 0)
     
+    # 🔍 ОТЛАДКА: Откуда берутся 25 кредиторов?
+    print(f"\n🔍 [DEBUG PDF] generate_applications_for_all_creditors получил:")
+    print(f"   - parsed_data keys: {list(parsed_data.keys())}")
+    print(f"   - obligations: {len(obligations)}")
+    print(f"   - total_debt: {total_debt}")
+    
+    print(f"\n📋 [DEBUG PDF] ВСЕ obligations для PDF ({len(obligations)}):")
+    for i, obligation in enumerate(obligations, 1):
+        creditor = obligation.get('creditor', 'Неизвестно')
+        balance = obligation.get('balance', 0)
+        print(f"   {i}. {creditor}: {balance} ₸")
+    
+    # Проверяем, есть ли другие источники кредиторов
+    if 'creditor_groups' in parsed_data:
+        creditor_groups = parsed_data['creditor_groups']
+        print(f"\n🔍 [DEBUG PDF] Найдены creditor_groups: {len(creditor_groups)} групп")
+        for group_name, group_data in creditor_groups.items():
+            print(f"   - '{group_name}': {len(group_data)} договоров")
+    
+    if 'raw_creditors' in parsed_data:
+        raw_creditors = parsed_data['raw_creditors']
+        print(f"\n🔍 [DEBUG PDF] Найдены raw_creditors: {len(raw_creditors)}")
+
     generated_files = []
     
     # print(f"[DEBUG] Генерируем заявления для {len(obligations)} кредиторов")
