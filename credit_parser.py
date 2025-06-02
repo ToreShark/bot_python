@@ -1350,12 +1350,18 @@ class GKBParser(BaseParser):
         
         return personal_info
     
+    # НАЙДИТЕ в классе GKBParser функцию extract_gkb_active_obligations
+    # И ЗАМЕНИТЕ её ПОЛНОСТЬЮ на этот код:
+
+    # НАЙДИТЕ в функции extract_gkb_active_obligations 
+    # строки с used_creditors и ЗАМЕНИТЕ их на этот код:
+
     def extract_gkb_active_obligations(self, text: str) -> List[Dict]:
-        """Извлекает ДЕЙСТВУЮЩИЕ обязательства из ГКБ с ПОЛНЫМИ данными"""
+        """Извлекает ДЕЙСТВУЮЩИЕ обязательства из ГКБ с УМНОЙ логикой БЕЗ ДУБЛИКАТОВ"""
         
         obligations = []
         
-        # Находим раздел с действующими обязательствами
+        # 1. Находим раздел с действующими обязательствами
         active_section = re.search(
             r'ПОДРОБНАЯ ИНФОРМАЦИЯ ПО ДЕЙСТВУЮЩИМ ДОГОВОРАМ(.*?)(?=ПОДРОБНАЯ ИНФОРМАЦИЯ О ЗАВЕРШЕННЫХ ДОГОВОРАХ|Текущие сведения)',
             text, 
@@ -1368,21 +1374,70 @@ class GKBParser(BaseParser):
         
         active_text = active_section.group(1)
         
-        # Ищем каждое обязательство (начинается с "Обязательство N")
+        # 2. СПОСОБ 1: Ищем обычные обязательства (с заголовком "Обязательство N")
+        print(f"🔍 Ищем обязательства СТАНДАРТНЫМ способом...")
         obligation_pattern = r'Обязательство\s+(\d+)(.*?)(?=Обязательство\s+\d+|$)'
-        obligation_matches = re.finditer(obligation_pattern, active_text, re.DOTALL)
+        standard_matches = re.finditer(obligation_pattern, active_text, re.DOTALL)
         
-        for match in obligation_matches:
+        standard_count = 0
+        for match in standard_matches:
             obligation_num = match.group(1)
             obligation_text = match.group(2)
             
             obligation_data = self.parse_gkb_single_obligation(obligation_text, obligation_num)
             if obligation_data:
                 obligations.append(obligation_data)
-                logger.info(f"  ✅ Обязательство #{obligation_num}: {obligation_data.get('creditor', 'Неизвестно')}")
+                standard_count += 1
+                print(f"  ✅ Найдено стандартное обязательство #{obligation_num}")
+        
+        print(f"📊 Стандартным способом найдено: {standard_count} обязательств")
+        
+        # ✅ ИСПРАВЛЕНИЕ: Создаем набор пар (кредитор + номер_договора) для проверки дубликатов
+        seen_pairs = {(obl['creditor'], obl['contract_number']) for obl in obligations}
+        
+        # 3. СПОСОБ 2: Если мало найдено - включаем РЕЗЕРВНЫЙ поиск
+        if len(obligations) < 10:  # Если меньше 10 - ищем дополнительно
+            print(f"⚠️  Мало обязательств! Включаем РЕЗЕРВНЫЙ поиск...")
+            
+            # Ищем блоки, которые начинаются с "Кредитор:" и заканчиваются "Количество дней просрочки:"
+            fallback_pattern = r'(Кредитор:.*?)(?=Кредитор:|$)'
+            fallback_matches = re.finditer(fallback_pattern, active_text, re.DOTALL)
+            
+            fallback_count = 0
+            
+            for i, match in enumerate(fallback_matches):
+                fallback_text = match.group(1)
+                
+                # Проверяем, что в блоке есть нужные поля
+                if ('Номер договора:' in fallback_text and 
+                    'Количество дней просрочки:' in fallback_text):
+                    
+                    # ✅ ИСПРАВЛЕНИЕ: Извлекаем И кредитора И номер договора
+                    creditor_match = re.search(r'Кредитор:\s*(.+)', fallback_text)
+                    contract_match = re.search(r'Номер договора:\s*(.+)', fallback_text)
+                    
+                    if creditor_match and contract_match:
+                        creditor_name = creditor_match.group(1).strip().strip('"')
+                        contract_num = contract_match.group(1).strip()
+                        
+                        # ✅ ИСПРАВЛЕНИЕ: Проверяем пару (кредитор + договор), а не только кредитора
+                        key = (creditor_name, contract_num)
+                        
+                        if key not in seen_pairs:
+                            obligation_data = self.parse_gkb_single_obligation(fallback_text, f"R{i+1}")
+                            if obligation_data and obligation_data.get('debt_amount', 0) > 0:
+                                obligations.append(obligation_data)
+                                seen_pairs.add(key)  # ✅ Добавляем пару в список найденных
+                                fallback_count += 1
+                                print(f"  ✅ Найдено резервное обязательство R{i+1}: {creditor_name} (договор: {contract_num})")
+                        else:
+                            print(f"  ⚠️  Пропускаем дубликат: {creditor_name} (договор: {contract_num})")
+            
+            print(f"📊 Резервным способом найдено: {fallback_count} обязательств")
+        
+        print(f"🎯 ИТОГО найдено обязательств: {len(obligations)}")
         
         return obligations
-    
     def parse_gkb_single_obligation(self, text: str, obligation_num: str) -> Optional[Dict]:
         """Парсит ОДНО обязательство ГКБ с извлечением ВСЕХ данных для банкротства"""
         
@@ -1423,13 +1478,101 @@ class GKBParser(BaseParser):
                     obligation['debt_origin_date'] = "НЕ НАЙДЕНА"
             
             # 4. СУММА ДОЛГА
-            debt_amount_match = re.search(r'Сумма предстоящих платежей.*?(\d+(?:\.\d+)?)\s*KZT', text)
-            if debt_amount_match:
-                obligation['debt_amount'] = float(debt_amount_match.group(1))
+            # debt_amount_match = re.search(r'Сумма предстоящих платежей.*?(\d+(?:\.\d+)?)\s*KZT', text)
+            # if debt_amount_match:
+            #     obligation['debt_amount'] = float(debt_amount_match.group(1))
+            # else:
+            #     obligation['debt_amount'] = 0.0
+            #     obligation['parsing_errors'].append("Сумма долга не найдена")
+            
+            # ✅ НОВЫЙ КОД (правильный):
+
+            # 4. СУММА ДОЛГА - ПРАВИЛЬНАЯ ЛОГИКА (по приоритету)
+            print(f"  🔍 Ищем сумму долга...")
+
+            # Ищем все возможные суммы
+            outstanding_match = re.search(r'Остаток задолженности.*?([\d\s]+\d(?:[,\.]\d+)?)\s*KZT', text)
+            future_payment_match = re.search(r'Сумма предстоящих платежей.*?([\d\s]+\d(?:[,\.]\d+)?)\s*KZT', text)
+            contract_sum_match = re.search(r'Сумма [Кк]редитного договора.*?([\d\s]+\d(?:[,\.]\d+)?)\s*KZT', text)
+            overdue_match = re.search(r'Сумма просроченных взносов.*?([\d\s]+\d(?:[,\.]\d+)?)\s*KZT', text)
+
+            # ПРИОРИТЕТ: Остаток → Предстоящие → Договор → Просрочка
+            if outstanding_match:
+                debt_str = outstanding_match.group(1).replace(' ', '').replace(',', '.')
+                obligation['debt_amount'] = float(debt_str)
+                obligation['debt_source'] = "Остаток задолженности"
+                print(f"  💰 Используем ОСТАТОК ЗАДОЛЖЕННОСТИ: {obligation['debt_amount']} KZT")
+
+            elif future_payment_match:
+                debt_str = future_payment_match.group(1).replace(' ', '').replace(',', '.')
+                obligation['debt_amount'] = float(debt_str)
+                obligation['debt_source'] = "Предстоящие платежи"
+                print(f"  💰 Используем ПРЕДСТОЯЩИЕ ПЛАТЕЖИ: {obligation['debt_amount']} KZT")
+
+            elif contract_sum_match:
+                debt_str = contract_sum_match.group(1).replace(' ', '').replace(',', '.')
+                obligation['debt_amount'] = float(debt_str)
+                obligation['debt_source'] = "Сумма договора"
+                print(f"  💰 Используем СУММУ ДОГОВОРА: {obligation['debt_amount']} KZT")
+
+            elif overdue_match:
+                debt_str = overdue_match.group(1).replace(' ', '').replace(',', '.')
+                obligation['debt_amount'] = float(debt_str)
+                obligation['debt_source'] = "Просроченные взносы"
+                print(f"  💰 Используем ПРОСРОЧЕННЫЕ ВЗНОСЫ: {obligation['debt_amount']} KZT")
+
             else:
                 obligation['debt_amount'] = 0.0
+                obligation['debt_source'] = "Не найдено"
                 obligation['parsing_errors'].append("Сумма долга не найдена")
-            
+                print(f"  ❌ Сумма долга НЕ НАЙДЕНА")
+
+            # ================================================
+            # 2. ИСПРАВЛЕНИЕ В extract_gkb_active_obligations - УСЛОВИЕ РЕЗЕРВНОГО ПОИСКА
+            # Найдите строку с "if len(obligations) < 10:" и ЗАМЕНИТЕ на:
+
+                # 3. СПОСОБ 2: Резервный поиск ТОЛЬКО если стандартный ничего не нашел
+                if len(obligations) == 0:  # ✅ ИСПРАВЛЕНИЕ: только если 0, а не < 10
+                    print(f"❌ Стандартный поиск ничего не нашел! Включаем РЕЗЕРВНЫЙ поиск...")
+                    
+                    # Остальной код резервного поиска остается тем же...
+                    fallback_pattern = r'(Кредитор:.*?)(?=Кредитор:|$)'
+                    # ... и так далее
+                else:
+                    print(f"✅ Стандартный поиск успешен, резервный поиск НЕ НУЖЕН")
+
+            # ================================================
+            # 3. БОНУС: Добавить в конце функции extract_gkb_active_obligations
+
+                # 📊 ИТОГОВАЯ СТАТИСТИКА ПО ИСТОЧНИКАМ ДОЛГА
+                debt_sources = {}
+                total_debt = 0
+                for obl in obligations:
+                    source = obl.get('debt_source', 'Неизвестно')
+                    amount = obl.get('debt_amount', 0)
+                    
+                    if source not in debt_sources:
+                        debt_sources[source] = {'count': 0, 'sum': 0}
+                    debt_sources[source]['count'] += 1
+                    debt_sources[source]['sum'] += amount
+                    total_debt += amount
+                
+                print(f"\n📊 СТАТИСТИКА ПО ИСТОЧНИКАМ ДОЛГА:")
+                for source, data in debt_sources.items():
+                    print(f"  📋 {source}: {data['count']} договоров, {data['sum']:,.2f} KZT")
+                print(f"💰 ОБЩИЙ ДОЛГ: {total_debt:,.2f} KZT")
+                
+                # 🎯 ПРОВЕРКА ПОРОГА БАНКРОТСТВА
+                bankruptcy_threshold = 9_000_000  # 9 млн KZT
+                if total_debt >= bankruptcy_threshold:
+                    print(f"🚨 ВНИМАНИЕ! Долг {total_debt:,.2f} KZT >= {bankruptcy_threshold:,.2f} KZT")
+                    print(f"✅ РЕКОМЕНДУЕТСЯ ПРОЦЕДУРА БАНКРОТСТВА!")
+                else:
+                    print(f"ℹ️  Долг {total_debt:,.2f} KZT < {bankruptcy_threshold:,.2f} KZT")
+                    print(f"🤔 Банкротство пока не критично")
+                
+                return obligations
+
             # 5. ПРОСРОЧЕННАЯ ЗАДОЛЖЕННОСТЬ
             overdue_match = re.search(r'Сумма просроченных взносов.*?(\d+(?:\.\d+)?)\s*KZT', text)
             if overdue_match:
@@ -1631,7 +1774,7 @@ def test_gkb_parser():
     
     try:
         # Читаем ваш файл
-        with open('debug_text_output_376068212_972e044a.txt', 'r', encoding='utf-8') as f:
+        with open('debug_text_output_376068212_744cb23e.txt', 'r', encoding='utf-8') as f:
             text = f.read()
         
         print("🚀 ТЕСТИРУЕМ ОБНОВЛЕННУЮ СИСТЕМУ ПАРСЕРОВ")
@@ -1709,7 +1852,7 @@ def test_gkb_parser_direct():
     """Прямой тест GKBParser без цепочки"""
     
     try:
-        with open('debug_text_output_376068212_972e044a.txt', 'r', encoding='utf-8') as f:
+        with open('debug_text_output_376068212_744cb23e.txt', 'r', encoding='utf-8') as f:
             text = f.read()
         
         print("🔍 ПРЯМОЙ ТЕСТ GKBParser")
