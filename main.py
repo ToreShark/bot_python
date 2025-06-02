@@ -534,16 +534,22 @@ def handle_credit_report_pdf(message):
                 text="⏳ Анализ завершен! Генерирую заявления к кредиторам..."
             )
             
-            # Импортируем функцию генерации заявлений
+            # ЗАМЕНИТЕ старый блок try/except на этот новый:
             try:
-                from credit_application_generator import process_credit_report_with_applications
-                result = process_credit_report_with_applications(file_path, user_id)
-            except Exception as import_error:
-                print(f"[ERROR] Ошибка импорта генератора заявлений: {import_error}")
+                from credit_application_generator import generate_applications_from_parsed_data
+                result = generate_applications_from_parsed_data(parsed_data, user_id)
+                print(f"[INFO] Результат генерации: статус={result.get('status')}, заявлений={result.get('applications_count', 0)}")
+            except Exception as generation_error:
+                print(f"[ERROR] Ошибка генерации заявлений: {generation_error}")
+                import traceback
+                traceback.print_exc()
                 # Fallback - используем стандартную обработку
                 result = {
+                    "status": "error",
                     "message": format_summary(parsed_data),
-                    "type": "credit_report"
+                    "type": "credit_report",
+                    "applications": [],
+                    "applications_count": 0
                 }
             
             # Создаем кнопки для навигации
@@ -554,13 +560,35 @@ def handle_credit_report_pdf(message):
             
             # Отправляем анализ кредитного отчета
             if result and "message" in result:
-                send_long_message(
-                    bot=bot,
-                    chat_id=message.chat.id,
-                    text=f"✅ **Анализ завершен**\n\n{result['message']}",
-                    reply_markup=markup,
-                    parse_mode='Markdown'
-                )
+                
+                # ДОБАВЬТЕ эту проверку статуса в самом начале:
+                if result.get('status') == 'error':
+                    # Если ошибка генерации, все равно показываем анализ отчета
+                    send_long_message(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        text=f"✅ **Анализ завершен**\n\n{result['message']}\n\n⚠️ Заявления не сгенерированы из-за ошибки.",
+                        reply_markup=markup,
+                        parse_mode='Markdown'
+                    )
+                    
+                    # Показываем банкротный анализ
+                    bankruptcy_analysis = analyze_credit_report_for_bankruptcy(parsed_data)
+                    bot.send_message(
+                        chat_id=message.chat.id,
+                        text=f"🧮 **ДОПОЛНИТЕЛЬНО: Банкротный анализ**\n\n{bankruptcy_analysis}",
+                        parse_mode='Markdown'
+                    )
+                    
+                else:
+                    # ОРИГИНАЛЬНЫЙ КОД остается БЕЗ ИЗМЕНЕНИЙ:
+                    send_long_message(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        text=f"✅ **Анализ завершен**\n\n{result['message']}",
+                        reply_markup=markup,
+                        parse_mode='Markdown'
+                    )
                 
                 # Отправляем сгенерированные заявления (если есть)
                 if result.get('applications'):

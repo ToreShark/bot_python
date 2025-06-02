@@ -214,6 +214,63 @@ def generate_credit_application_pdf(personal_info, creditor_data, total_debt):
         except:
             pass
 
+# Добавьте эту функцию в credit_application_generator.py ПОСЛЕ существующих функций
+
+def generate_applications_from_parsed_data(parsed_data, user_id):
+    """
+    Генерирует заявления для кредиторов из уже готовых данных отчета
+    
+    Args:
+        parsed_data: результат парсинга кредитного отчета (от GKBParser или других)
+        user_id: ID пользователя для логирования
+    
+    Returns:
+        dict: результат с applications или ошибкой
+    """
+    try:
+        # Проверяем корректность данных
+        if not parsed_data or parsed_data.get('parsing_error'):
+            return {
+                "status": "error",
+                "message": "Некорректные данные отчета",
+                "applications": [],
+                "applications_count": 0
+            }
+        
+        print(f"[INFO] Генерируем заявления из готовых данных для пользователя {user_id}")
+        print(f"[INFO] Найдено {len(parsed_data.get('obligations', []))} кредиторов")
+        
+        # Импортируем format_summary для создания сообщения
+        from credit_parser import format_summary
+        
+        # Генерируем заявления используя уже готовые данные
+        applications = generate_applications_for_all_creditors(parsed_data)
+        
+        # Формируем результат в том же формате что ожидает main.py
+        result = {
+            "status": "success",
+            "message": format_summary(parsed_data),
+            "type": "credit_report", 
+            "applications": applications,
+            "applications_count": len(applications)
+        }
+        
+        print(f"[INFO] Успешно сгенерировано {len(applications)} заявлений")
+        return result
+        
+    except Exception as e:
+        print(f"[ERROR] Ошибка генерации заявлений из parsed_data: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return {
+            "status": "error", 
+            "message": f"Ошибка генерации заявлений: {str(e)}",
+            "type": "credit_report",
+            "applications": [],
+            "applications_count": 0
+        }
+
 def extract_contract_details(description):
     """
     Извлекает номер договора и дату из строки вида "Договор №123456 от 01.01.2022"
