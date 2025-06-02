@@ -186,9 +186,9 @@ class FinalPKBParser:
                 # Паттерн 1: Кредитная карта/Займ + название + Заёмщик
                 patterns = [
                     r'(?:Кредитная карта|Займ|Кредит)\s+(.*?)\s+Заёмщик',  # Основной паттерн включая "Кредитная карта"
-                    r'\b(АО|ТОО)\s+["""«][^"""«»]+["""»]',                    # АО/ТОО с кавычками
-                    r'\b(АО|ТОО)\s+"[^"]+?"',                                # АО/ТОО с обычными кавычками
-                    r'\b(АО|ТОО)\s+[^\n\r\t]+?(?=\s+Заёмщик)',              # АО/ТОО до слова Заёмщик
+                    r'\b(АО|ТОО|СФК)\s+["""«][^"""«»]+["""»]',                   # ✅ Добавлен СФК
+                    r'\b(АО|ТОО|СФК)\s+"[^"]+?"',                               # ✅ Добавлен СФК
+                    r'\b(АО|ТОО|СФК)\s+[^\n\r\t]+?(?=\s+Заёмщик)',             # ✅ Добавлен СФК
                 ]
                 
                 for pattern in patterns:
@@ -460,54 +460,49 @@ class FinalPKBParser:
     def group_creditors(self, creditors: List[Dict]) -> Dict[str, List[Dict]]:
         """
         Группирует кредиторов по названию с улучшенной нормализацией:
-        - Удаляет лишние кавычки, формы типа "ТОО", "АО"
+        - Удаляет лишние кавычки, формы типа "ТОО", "АО", "СФК"
         - Приводит к нижнему регистру для ключа группировки
         - Сохраняет наиболее полное название для отображения
         """
         def improved_normalize_creditor_name(name: str) -> str:
-            # Приведение всех кавычек к обычным
+            # Унификация кавычек и очистка формы собственности
             name = re.sub(r'[«»„“”]', '"', name)
-            while '""' in name:
-                name = name.replace('""', '"')
+            name = name.replace('""', '"')
+            name = re.sub(r'\b(тоо|ао|оао|зао|ооо|сфк)\b', '', name, flags=re.IGNORECASE)
             name = re.sub(r'\bс правом обратного выкупа\b', '', name, flags=re.IGNORECASE)
-            name = re.sub(r'^\s*(тоо|ао|оао|зао|ооо)\s*', '', name, flags=re.IGNORECASE)
-            name = name.strip('" ').strip()
-            name = re.sub(r'[\)"]+$', '', name).strip()
-            return name
+            name = re.sub(r'[^\w\s"()-]', '', name)  # удаляем лишние символы кроме букв/цифр/скобок
+            name = re.sub(r'\s+', ' ', name).strip(' "\n\r')
+            return name.lower()
+
+        def normalize_display_name(name: str) -> str:
+            name = re.sub(r'[«»„“”]', '"', name)
+            name = name.replace('""', '"')
+            name = re.sub(r'\bс правом обратного выкупа\b', '', name, flags=re.IGNORECASE)
+            return name.strip(' "\'\n\r')
 
         groups = {}
-        
-        for creditor in creditors:
-            name = creditor["creditor"]
-            
-            # 🧠 Ключ: нормализуем имя (без регистра), чтобы сгруппировать похожие
-            normalized_key = improved_normalize_creditor_name(name).lower()
-            display_name = self._normalize_creditor_display(name)
 
-            # print(f"\n📌 СЫРОЙ кредитор: {name}")
-            # print(f"🔑 Ключ группировки: {normalized_key}")
-            # print(f"🪪 Отображаемое имя: {display_name}")
-            
+        for creditor in creditors:
+            raw_name = creditor["creditor"]
+            normalized_key = improved_normalize_creditor_name(raw_name)
+            display_name = normalize_display_name(raw_name)
+
             if normalized_key not in groups:
                 groups[normalized_key] = {
-                    "display_name": display_name,  # уже нормализован
+                    "display_name": display_name,
                     "contracts": []
                 }
             else:
                 existing_display = groups[normalized_key]["display_name"]
-                # сравниваем по длине нормализованных, но сохраняем нормализованное
                 if len(display_name) > len(existing_display):
                     groups[normalized_key]["display_name"] = display_name
 
-            
             groups[normalized_key]["contracts"].append(creditor)
-        
-        # 🎯 Возвращаем в нужной форме: {отображаемое имя: [контракты]}
-        result = {}
-        for group_data in groups.values():
-            result[group_data["display_name"]] = group_data["contracts"]
-        
-        return result
+
+        return {
+            group_data["display_name"]: group_data["contracts"]
+            for group_data in groups.values()
+        }
 
     def _normalize_creditor_display(self, name: str) -> str:
         """Нормализует имя кредитора для вывода пользователю"""
