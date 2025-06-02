@@ -7,7 +7,7 @@ from legal_engine import query
 from datetime import datetime, timezone, timedelta
 from telebot import types
 from document_processor import process_uploaded_file
-from credit_parser import format_summary
+from credit_parser import FallbackParser, GKBParser, PKBParser, format_summary
 import time
 import requests
 from pydub import AudioSegment
@@ -480,14 +480,57 @@ def handle_credit_report_pdf(message):
         from ocr import ocr_file
         from credit_parser import extract_credit_data_with_total
         
-        # Извлекаем текст из PDF
-        text = extract_text_from_pdf(file_path)
-        if not text.strip():
-            text = ocr_file(file_path)
+        # # Извлекаем текст из PDF
+        # text = extract_text_from_pdf(file_path)
+        # if not text.strip():
+        #     text = ocr_file(file_path)
         
-        # Парсим кредитный отчет
-        parsed_data = extract_credit_data_with_total(text)
-        
+        # # Парсим кредитный отчет
+        # parsed_data = extract_credit_data_with_total(text)
+        if is_bankruptcy_mode:
+            # 🧮 БАНКРОТНЫЙ КАЛЬКУЛЯТОР: используем GKBParser для точности
+            # print(f"[INFO] Банкротный режим: используем цепочку парсеров для файла {file_path}")
+            
+            # Импортируем цепочку парсеров (как в document_processor.py)
+            from text_extractor import extract_text_from_pdf
+            from ocr import ocr_file
+            
+            
+            # Извлекаем текст из PDF
+            text = extract_text_from_pdf(file_path)
+            if not text.strip():
+                text = ocr_file(file_path)
+            
+            # Создаем цепочку парсеров (как в document_processor.py)
+            gkb_parser = GKBParser()
+            pkb_parser = PKBParser()
+            fallback_parser = FallbackParser()
+            
+            # Устанавливаем цепочку: GKB -> PKB -> Emergency
+            gkb_parser.set_next(pkb_parser).set_next(fallback_parser)
+            
+            # Запускаем парсинг через цепочку
+            # print(f"[INFO] Запускаем цепочку парсеров для банкротного анализа...")
+            parsed_data = gkb_parser.parse(text)
+            
+            # print(f"[INFO] Результат парсинга: {len(parsed_data.get('obligations', []))} обязательств найдено")
+            
+        else:
+            # 📊 ОБЫЧНЫЙ РЕЖИМ: используем старый парсинг (не трогаем)
+            print(f"[INFO] Обычный режим: используем старую логику парсинга")
+            
+            # Импортируем старые модули
+            from text_extractor import extract_text_from_pdf
+            from ocr import ocr_file
+            from credit_parser import extract_credit_data_with_total
+            
+            # Извлекаем текст из PDF (старая логика)
+            text = extract_text_from_pdf(file_path)
+            if not text.strip():
+                text = ocr_file(file_path)
+            
+            # Парсим кредитный отчет (старая логика)
+            parsed_data = extract_credit_data_with_total(text)
         # 🆕 ДОБАВИТЬ ЭТИ СТРОКИ - СОХРАНЕНИЕ В БД:
         # Сохраняем в БД (однократно)  
         try:
@@ -538,7 +581,7 @@ def handle_credit_report_pdf(message):
             try:
                 from credit_application_generator import generate_applications_from_parsed_data
                 result = generate_applications_from_parsed_data(parsed_data, user_id)
-                print(f"[INFO] Результат генерации: статус={result.get('status')}, заявлений={result.get('applications_count', 0)}")
+                # print(f"[INFO] Результат генерации: статус={result.get('status')}, заявлений={result.get('applications_count', 0)}")
             except Exception as generation_error:
                 print(f"[ERROR] Ошибка генерации заявлений: {generation_error}")
                 import traceback

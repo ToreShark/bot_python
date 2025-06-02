@@ -14,6 +14,8 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
+DEBUG_PRINT = os.getenv('DEBUG', 'False').lower() == 'true'
+
 # Регистрируем шрифт для русского текста
 def register_fonts():
     """Регистрирует шрифты для корректного отображения кириллицы"""
@@ -236,9 +238,9 @@ def generate_applications_from_parsed_data(parsed_data, user_id):
                 "applications": [],
                 "applications_count": 0
             }
-        
-        print(f"[INFO] Генерируем заявления из готовых данных для пользователя {user_id}")
-        print(f"[INFO] Найдено {len(parsed_data.get('obligations', []))} кредиторов")
+        if DEBUG_PRINT:
+            print(f"[INFO] Генерируем заявления из готовых данных для пользователя {user_id}")
+            print(f"[INFO] Найдено {len(parsed_data.get('obligations', []))} кредиторов")
         
         # Импортируем format_summary для создания сообщения
         from credit_parser import format_summary
@@ -255,7 +257,7 @@ def generate_applications_from_parsed_data(parsed_data, user_id):
             "applications_count": len(applications)
         }
         
-        print(f"[INFO] Успешно сгенерировано {len(applications)} заявлений")
+        # print(f"[INFO] Успешно сгенерировано {len(applications)} заявлений")
         return result
         
     except Exception as e:
@@ -285,19 +287,19 @@ def generate_creditors_list_pdf(parsed_data):
     ОБНОВЛЕННАЯ версия - использует данные от GKBParser
     """
     try:
-        print(f"\n🎯 [UPDATED] Создание PDF с полными данными:")
-        print(f"   📋 Ключи parsed_data: {list(parsed_data.keys())}")
-        print(f"   📄 report_type: {parsed_data.get('report_type')}")
-        print(f"   🎯 bankruptcy_ready: {parsed_data.get('bankruptcy_ready')}")
-        print(f"   📊 Количество obligations: {len(parsed_data.get('obligations', []))}")
+        # print(f"\n🎯 [UPDATED] Создание PDF с полными данными:")
+        # print(f"   📋 Ключи parsed_data: {list(parsed_data.keys())}")
+        # print(f"   📄 report_type: {parsed_data.get('report_type')}")
+        # print(f"   🎯 bankruptcy_ready: {parsed_data.get('bankruptcy_ready')}")
+        # print(f"   📊 Количество obligations: {len(parsed_data.get('obligations', []))}")
         
         # Проверяем первое обязательство
         obligations = parsed_data.get('obligations', [])
         if obligations:
             first_obl = obligations[0]
-            print(f"   🔍 Поля первого обязательства: {list(first_obl.keys())}")
-            print(f"   📄 contract_number: {first_obl.get('contract_number', 'ОТСУТСТВУЕТ')}")
-            print(f"   📅 debt_origin_date: {first_obl.get('debt_origin_date', 'ОТСУТСТВУЕТ')}")
+            # print(f"   🔍 Поля первого обязательства: {list(first_obl.keys())}")
+            # print(f"   📄 contract_number: {first_obl.get('contract_number', 'ОТСУТСТВУЕТ')}")
+            # print(f"   📅 debt_origin_date: {first_obl.get('debt_origin_date', 'ОТСУТСТВУЕТ')}")
         
         
         # Проверяем, есть ли данные от GKBParser
@@ -316,8 +318,8 @@ def generate_creditors_list_pdf(parsed_data):
             if debt_origin_date and debt_origin_date != 'НЕ НАЙДЕНА':
                 total_dates_with_data += 1
         
-        print(f"   📄 Номера договоров: {total_contracts_with_data}/{len(obligations)}")
-        print(f"   📅 Даты образования: {total_dates_with_data}/{len(obligations)}")
+        # print(f"   📄 Номера договоров: {total_contracts_with_data}/{len(obligations)}")
+        # print(f"   📅 Даты образования: {total_dates_with_data}/{len(obligations)}")
         
         # Определяем статус готовности
         is_bankruptcy_ready = (total_contracts_with_data > 0 and total_dates_with_data > 0)
@@ -555,12 +557,13 @@ def generate_applications_for_all_creditors(parsed_data):
     total_debt = parsed_data.get('total_debt', 0)
     
     # 🔍 ОТЛАДКА: Откуда берутся 25 кредиторов?
-    print(f"\n🔍 [DEBUG PDF] generate_applications_for_all_creditors получил:")
-    print(f"   - parsed_data keys: {list(parsed_data.keys())}")
-    print(f"   - obligations: {len(obligations)}")
-    print(f"   - total_debt: {total_debt}")
+    if DEBUG_PRINT:
+        print(f"\n🔍 [DEBUG PDF] generate_applications_for_all_creditors получил:")
+        print(f"   - parsed_data keys: {list(parsed_data.keys())}")
+        print(f"   - obligations: {len(obligations)}")
+        print(f"   - total_debt: {total_debt}")
     
-    print(f"\n📋 [DEBUG PDF] ВСЕ obligations для PDF ({len(obligations)}):")
+    # print(f"\n📋 [DEBUG PDF] ВСЕ obligations для PDF ({len(obligations)}):")
     for i, obligation in enumerate(obligations, 1):
         creditor = obligation.get('creditor', 'Неизвестно')
         balance = obligation.get('balance', 0)
