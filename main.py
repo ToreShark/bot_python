@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from bankruptcy_calculator import analyze_credit_report_for_bankruptcy
+from collateral_parser import extract_collateral_info
 from legal_engine import query
 from datetime import datetime, timezone, timedelta
 from telebot import types
@@ -30,6 +31,13 @@ client = MongoClient(MONGO_URI)
 # Выбор базы данных и коллекции
 db = client['telegram_bot']
 users_collection = db['users']
+
+# Коллекции для курсов (добавить эти строки)
+courses_collection = db['courses']
+lessons_collection = db['lessons'] 
+course_access_collection = db['course_access']
+user_progress_collection = db['user_progress']
+temp_videos_collection = db['temp_videos']
 
 # Простая антивандальная структура: последний доступ
 user_last_access = {}
@@ -513,6 +521,7 @@ def handle_credit_report_pdf(message):
             # print(f"[INFO] Запускаем цепочку парсеров для банкротного анализа...")
             parsed_data = gkb_parser.parse(text)
             
+            parsed_data["collaterals"] = extract_collateral_info(text)
             # print(f"[INFO] Результат парсинга: {len(parsed_data.get('obligations', []))} обязательств найдено")
             
         else:
@@ -1145,30 +1154,6 @@ ANNOUNCEMENT_TEXT = """🎉 **НОВЫЕ ФУНКЦИИ В БОТЕ!**
 
 💡 Все функции анализа кредитных отчетов остаются бесплатными."""
 
-@bot.message_handler(func=lambda message: True)
-def handle_all_messages(message):
-    """Обработка всех остальных сообщений"""
-    user_id = message.from_user.id
-    current_state = user_states.get(user_id)
-    
-    if current_state == "lawyer_consultation":
-        # Обработка вопроса к юристу
-        handle_lawyer_question(message)
-    elif current_state == "waiting_credit_report":
-        # Пользователь в режиме ожидания кредитного отчета
-        bot.reply_to(
-            message,
-            "📊 Пожалуйста, отправьте PDF файл кредитного отчета.\n"
-            "Текстовые сообщения не обрабатываются в этом режиме."
-        )
-    else:
-        # Предлагаем воспользоваться главным меню
-        markup = create_main_menu()
-        bot.send_message(
-            message.chat.id,
-            "🤖 Используйте команду /start или выберите услугу:",
-            reply_markup=markup
-        )
 
 def handle_lawyer_question(message):
     """Обработка вопроса к юристу"""
@@ -1332,6 +1317,93 @@ def handle_how_to_get_report(call):
         reply_markup=markup,
         parse_mode='Markdown'
     )
+
+# И добавьте эту команду:
+@bot.message_handler(commands=['get_channel_id'])
+def get_channel_id(message):
+    ADMIN_IDS = [376068212, 827743984]  # ваши ID
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    bot.reply_to(message, "Перешлите любое сообщение из канала")
+
+# Новый обработчик только для пересылки
+@bot.message_handler(content_types=['text'], func=lambda message: message.forward_from_chat is not None)
+def handle_forwarded(message):
+    ADMIN_IDS = [376068212, 827743984]
+    if message.from_user.id not in ADMIN_IDS:
+        return
+        
+    channel_id = message.forward_from_chat.id
+    bot.reply_to(message, f"ID канала: {channel_id}")
+
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    """Обработка всех остальных сообщений"""
+    user_id = message.from_user.id
+    current_state = user_states.get(user_id)
+    
+    if current_state == "lawyer_consultation":
+        # Обработка вопроса к юристу
+        handle_lawyer_question(message)
+    elif current_state == "waiting_credit_report":
+        # Пользователь в режиме ожидания кредитного отчета
+        bot.reply_to(
+            message,
+            "📊 Пожалуйста, отправьте PDF файл кредитного отчета.\n"
+            "Текстовые сообщения не обрабатываются в этом режиме."
+        )
+    else:
+        # Предлагаем воспользоваться главным меню
+        markup = create_main_menu()
+        bot.send_message(
+            message.chat.id,
+            "🤖 Используйте команду /start или выберите услугу:",
+            reply_markup=markup
+        )
+
+
+@bot.message_handler(commands=['channel_info'])
+def channel_info(message):
+    ADMIN_IDS = [376068212, 827743984]
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    bot.reply_to(message, 
+        "📋 **Способы получения ID канала:**\n\n"
+        "**Вариант 1:** Сделайте канал публичным:\n"
+        "• Настройки канала → Тип канала → Публичный\n"
+        "• Установите username (например @mychannel)\n"
+        "• ID будет: @mychannel\n\n"
+        "**Вариант 2:** Временно публичный:\n"
+        "1. Сделайте канал публичным\n"
+        "2. Перешлите сообщение из канала мне\n"
+        "3. Верните канал обратно в приватный\n\n"
+        "**Вариант 3:** Отправьте сообщение прямо в канал с ботом",
+        parse_mode='Markdown'
+    )
+@bot.message_handler(func=lambda message: message.chat.type in ['channel', 'supergroup'])
+def handle_channel_message(message):
+    """Обработка сообщений в канале/группе"""
+    ADMIN_IDS = [376068212, 827743984]
+    
+    # Проверяем, есть ли админ в канале
+    try:
+        for admin_id in ADMIN_IDS:
+            chat_member = bot.get_chat_member(message.chat.id, admin_id)
+            if chat_member.status in ['creator', 'administrator', 'member']:
+                # Отправляем ID канала админу в личку
+                bot.send_message(
+                    admin_id, 
+                    f"📢 ID канала/группы: `{message.chat.id}`\n"
+                    f"📝 Название: {message.chat.title}\n"
+                    f"💬 Сообщение: {message.text[:50]}...",
+                    parse_mode='Markdown'
+                )
+                break
+    except Exception as e:
+        print(f"[ERROR] Ошибка в канале: {e}")
+
 # Запуск бота
 if __name__ == "__main__":
     print("[INFO] Бот запущен...")
@@ -1341,3 +1413,6 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"[ERROR] Polling crashed: {e}")
             time.sleep(5)
+
+# Удалите старый @bot.message_handler(func=lambda message: True)
+
