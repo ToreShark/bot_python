@@ -29,6 +29,8 @@ load_dotenv()
 
 # LLM
 # llm = ChatOpenAI(model="gpt-4-turbo")
+# llm = ChatOpenAI(model="gpt-3.5-turbo")
+
 llm = ChatAnthropic(
     model="claude-3-5-sonnet-20241022",  # Можно использовать другую модель, например claude-3-7-sonnet-latest
     temperature=0.2,
@@ -325,3 +327,78 @@ def query(query_text, progress_callback=lambda x: None):
     )
 
     return final_rag_chain.invoke({"question": query_text, "context": q_a_pairs})
+
+# def query(query_text, progress_callback=lambda x: None):
+#     print(f"[DEBUG] Начинаем обработку запроса: {query_text[:100]}...")
+    
+#     try:
+#         # Шаг 1: генерация подвопросов
+#         progress_callback("🔍 Генерирую юридические подвопросы...")
+#         print(f"[DEBUG] Шаг 1: Вызываем generate_sub_questions()")
+        
+#         sub_questions = generate_sub_questions(query_text)
+        
+#         print(f"[DEBUG] ✅ Шаг 1 УСПЕШЕН. Получено подвопросов: {len(sub_questions) if sub_questions else 0}")
+#         if sub_questions:
+#             for i, q in enumerate(sub_questions, 1):
+#                 print(f"[DEBUG] Подвопрос {i}: {q}")
+        
+#     except Exception as e:
+#         print(f"[ERROR] 💥 ОШИБКА В ШАГЕ 1 (generate_sub_questions): {e}")
+#         import traceback
+#         traceback.print_exc()
+#         raise e
+
+#     try:
+#         # Шаг 2: поиск документов
+#         progress_callback("📚 Ищу релевантные документы...")
+#         print(f"[DEBUG] Шаг 2: Вызываем retrieve_documents()")
+        
+#         retrieved_docs_dict = retrieve_documents(sub_questions)
+        
+#         print(f"[DEBUG] ✅ Шаг 2 УСПЕШЕН. Найдено документов для {len(retrieved_docs_dict)} подвопросов")
+        
+#     except Exception as e:
+#         print(f"[ERROR] 💥 ОШИБКА В ШАГЕ 2 (retrieve_documents): {e}")
+#         import traceback
+#         traceback.print_exc()
+#         raise e
+
+#     try:
+#         # Шаг 3: генерация Q/A по документам
+#         progress_callback("⚖️ Анализирую законодательство и судебную практику...")
+#         print(f"[DEBUG] Шаг 3: Вызываем generate_qa_pairs()")
+        
+#         q_a_pairs = generate_qa_pairs(retrieved_docs_dict)
+        
+#         print(f"[DEBUG] ✅ Шаг 3 УСПЕШЕН. Длина Q/A пар: {len(q_a_pairs) if q_a_pairs else 0}")
+        
+#     except Exception as e:
+#         print(f"[ERROR] 💥 ОШИБКА В ШАГЕ 3 (generate_qa_pairs): {e}")
+#         import traceback
+#         traceback.print_exc()
+#         raise e
+
+#     try:
+#         # Шаг 4: итоговый ответ
+#         progress_callback("🧠 Формирую итоговый юридический вывод...")
+#         print(f"[DEBUG] Шаг 4: Формируем итоговый ответ")
+        
+#         final_rag_chain = (
+#             prompt
+#             | llm
+#             | StrOutputParser()
+#         )
+
+#         result = final_rag_chain.invoke({"question": query_text, "context": q_a_pairs})
+        
+#         print(f"[DEBUG] ✅ Шаг 4 УСПЕШЕН. Длина ответа: {len(result) if result else 0}")
+#         print(f"[DEBUG] 🎉 ВЕСЬ ПРОЦЕСС ЗАВЕРШЕН УСПЕШНО")
+        
+#         return result
+        
+#     except Exception as e:
+#         print(f"[ERROR] 💥 ОШИБКА В ШАГЕ 4 (final_rag_chain): {e}")
+#         import traceback
+#         traceback.print_exc()
+#         raise e
