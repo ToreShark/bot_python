@@ -37,11 +37,405 @@ courses_collection = db['courses']
 lessons_collection = db['lessons'] 
 course_access_collection = db['course_access']
 user_progress_collection = db['user_progress']
+# Коллекции для системы консультаций
+consultation_slots_collection = db['consultation_slots']
+consultation_queue_collection = db['consultation_queue']
 temp_videos_collection = db['temp_videos']
 
 # Простая антивандальная структура: последний доступ
 user_last_access = {}
 user_states = {}  # Для отслеживания состояний пользователей
+def get_available_consultation_slots():
+    """Получает доступные слоты консультаций на ближайшие 3 понедельника"""
+    from datetime import datetime, timedelta
+
+    available_slots = []
+    
+    # Находим ближайшие 3 понедельника
+    today = datetime.now()
+    days_until_monday = (7 - today.weekday()) % 7
+    if days_until_monday == 0 and today.hour >= 17:  # Если уже поздно в понедельник
+        days_until_monday = 7
+
+    for week in range(3):  # Ближайшие 3 недели
+        monday_date = today + timedelta(days=days_until_monday + (week * 7))
+        date_str = monday_date.strftime("%Y-%m-%d")
+        date_formatted = monday_date.strftime("%d.%m.%Y")
+        
+        for hour in [14, 15, 16]:  # слоты на 14:00, 15:00, 16:00
+            slot_id = f"{date_str}_{hour:02d}:00"
+            time_display = f"{hour:02d}:00-{hour+1:02d}:00"
+
+            # Проверка существующего слота
+            existing_slot = consultation_slots_collection.find_one({"slot_id": slot_id})
+            
+            if not existing_slot:
+                consultation_slots_collection.insert_one({
+                    "date": date_str,
+                    "time_slot": time_display,
+                    "slot_id": slot_id,
+                    "status": "open",
+                    "max_capacity": 1,
+                    "created_at": datetime.utcnow(),
+                    "admin_notes": ""
+                })
+            
+            # Проверяем статус и очередь
+            slot = consultation_slots_collection.find_one({"slot_id": slot_id})
+            if slot and slot["status"] == "open":
+                queue_count = consultation_queue_collection.count_documents({
+                    "slot_id": slot_id,
+                    "status": {"$nin": ["cancelled", "completed"]}
+                })
+
+                available_slots.append({
+                    "slot_id": slot_id,
+                    "date": date_str,
+                    "date_formatted": date_formatted,
+                    "time_display": time_display,
+                    "queue_length": queue_count
+                })
+
+    return available_slots
+
+def handle_slot_booking(call):
+    """Обработка записи пользователя на конкретный слот"""
+    user_id = call.from_user.id
+    first_name = call.from_user.first_name or "Пользователь"
+    last_name = call.from_user.last_name or ""
+    user_name = f"{first_name} {last_name}".strip()
+    
+    slot_id = call.data.replace("book_slot_", "")
+    
+    # Проверка: не записан ли уже пользователь
+    existing_booking = consultation_queue_collection.find_one({
+        "slot_id": slot_id,
+        "user_id": user_id,
+        "status": {"$nin": ["cancelled", "completed"]}
+    })
+    
+    if existing_booking:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Назад к слотам", callback_data="free_consultation"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="⚠️ **Вы уже записаны на эту консультацию**\n\n"
+                 f"📍 Ваше место в очереди: {existing_booking['position']}\n"
+                 f"📊 Статус: {get_status_text(existing_booking['status'])}",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Проверяем доступность слота
+    slot = consultation_slots_collection.find_one({"slot_id": slot_id})
+    if not slot or slot["status"] != "open":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Назад к слотам", callback_data="free_consultation"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="❌ **Слот недоступен**\n\n"
+                 "Этот временной слот закрыт или отменен.",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Запись в очередь
+    queue_size = consultation_queue_collection.count_documents({
+        "slot_id": slot_id,
+        "status": {"$nin": ["cancelled", "completed"]}
+    })
+    new_position = queue_size + 1
+
+    consultation_queue_collection.insert_one({
+        "slot_id": slot_id,
+        "user_id": user_id,
+        "user_name": user_name,
+        "position": new_position,
+        "status": "waiting",
+        "registered_at": datetime.utcnow(),
+        "confirmed_day_at": None,
+        "confirmed_hour_at": None,
+        "notifications_sent": {
+            "day_before": False,
+            "hour_before": False
+        }
+    })
+
+    # Отображаем пользователю запись
+    date_str, time_str = slot_id.split("_")
+    slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+    formatted_date = slot_date.strftime("%d.%m.%Y")
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📋 Мои записи", callback_data="my_consultations"))
+    markup.add(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu"))
+    
+    pos_text = "первые" if new_position == 1 else f"{new_position}-е место"
+    
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="✅ **Запись успешна!**\n\n"
+             f"📅 Дата: {formatted_date} (понедельник)\n"
+             f"🕐 Время: {time_str}-{int(time_str.split(':')[0]) + 1:02d}:00\n"
+             f"📍 Ваше место: {pos_text}\n\n"
+             "📲 Мы отправим вам напоминания:\n"
+             "• За день до консультации\n"
+             "• За час до консультации\n\n"
+             "💡 Обязательно подтверждайте участие!",
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+def get_status_text(status):
+    """Преобразует статус в читаемый текст"""
+    status_map = {
+        "waiting": "Ожидание",
+        "confirmed_day": "Подтвержден (за день)",
+        "confirmed_hour": "Подтвержден (за час)",
+        "cancelled": "Отменен",
+        "completed": "Завершен"
+    }
+    return status_map.get(status, "Неизвестно")
+
+def handle_my_consultations(call):
+    """Показывает записи пользователя на консультации"""
+    user_id = call.from_user.id
+
+    # Получаем активные записи
+    user_bookings = list(consultation_queue_collection.find({
+        "user_id": user_id,
+        "status": {"$nin": ["cancelled", "completed"]}
+    }).sort("registered_at", 1))
+
+    if not user_bookings:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📅 Записаться", callback_data="free_consultation"))
+        markup.add(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu"))
+
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="📋 **Мои записи**\n\n"
+                 "У вас нет активных записей на консультации.\n"
+                 "Хотите записаться?",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        return
+
+    # Формируем текст
+    bookings_text = "📋 **Мои записи на консультации:**\n\n"
+    markup = types.InlineKeyboardMarkup(row_width=1)
+
+    for booking in user_bookings:
+        slot_id = booking["slot_id"]
+        date_str, time_str = slot_id.split("_")
+        slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = slot_date.strftime("%d.%m.%Y")
+        end_hour = int(time_str.split(':')[0]) + 1
+        time_display = f"{time_str}-{end_hour:02d}:00"
+        status_text = get_status_text(booking["status"])
+        position = booking["position"]
+
+        bookings_text += f"📅 **{formatted_date}** в **{time_display}**\n"
+        bookings_text += f"📍 Место в очереди: {position}\n"
+        bookings_text += f"📊 Статус: {status_text}\n"
+
+        now = datetime.now()
+        consultation_dt = datetime.combine(slot_date.date(), datetime.strptime(time_str, "%H:%M").time())
+        if consultation_dt > now:
+            delta = consultation_dt - now
+            days = delta.days
+            hours = delta.seconds // 3600
+            if days > 0:
+                bookings_text += f"⏰ Через {days} дн. {hours} ч.\n"
+            elif hours > 0:
+                bookings_text += f"⏰ Через {hours} ч.\n"
+            else:
+                bookings_text += f"⏰ Скоро!\n"
+        
+        bookings_text += "\n"
+
+        markup.add(types.InlineKeyboardButton(
+            f"❌ Отменить {formatted_date} {time_str}",
+            callback_data=f"cancel_booking_{booking['_id']}"
+        ))
+
+    markup.add(types.InlineKeyboardButton("📅 Записаться еще", callback_data="free_consultation"))
+    markup.add(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu"))
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=bookings_text,
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+def handle_cancel_booking(call):
+    """Отменяет запись пользователя и продвигает очередь"""
+    from bson import ObjectId
+    user_id = call.from_user.id
+    booking_id = call.data.replace("cancel_booking_", "")
+
+    try:
+        booking = consultation_queue_collection.find_one({
+            "_id": ObjectId(booking_id),
+            "user_id": user_id
+        })
+
+        if not booking:
+            bot.answer_callback_query(call.id, "❌ Запись не найдена")
+            return
+
+        slot_id = booking["slot_id"]
+        cancelled_position = booking["position"]
+
+        consultation_queue_collection.update_one(
+            {"_id": ObjectId(booking_id)},
+            {
+                "$set": {
+                    "status": "cancelled",
+                    "cancelled_at": datetime.utcnow()
+                }
+            }
+        )
+
+        consultation_queue_collection.update_many(
+            {
+                "slot_id": slot_id,
+                "position": {"$gt": cancelled_position},
+                "status": {"$nin": ["cancelled", "completed"]}
+            },
+            {"$inc": {"position": -1}}
+        )
+
+        promoted_users = list(consultation_queue_collection.find({
+            "slot_id": slot_id,
+            "position": {"$lte": cancelled_position},
+            "status": {"$nin": ["cancelled", "completed"]},
+            "user_id": {"$ne": user_id}
+        }))
+
+        for promoted_user in promoted_users:
+            try:
+                date_str, time_str = slot_id.split("_")
+                slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+                formatted_date = slot_date.strftime("%d.%m.%Y")
+                end_hour = int(time_str.split(':')[0]) + 1
+                time_display = f"{time_str}-{end_hour:02d}:00"
+                new_position = promoted_user["position"]
+
+                if new_position == 1:
+                    msg = (
+                        f"🎉 **Отличная новость!**\n\n"
+                        f"Вы стали первым в очереди на консультацию!\n\n"
+                        f"📅 Дата: {formatted_date}\n"
+                        f"🕐 Время: {time_display}\n\n"
+                        f"📲 Мы пришлем вам напоминания перед консультацией."
+                    )
+                else:
+                    msg = (
+                        f"📈 **Вы продвинулись в очереди!**\n\n"
+                        f"📅 Дата: {formatted_date}\n"
+                        f"🕐 Время: {time_display}\n"
+                        f"📍 Новое место: {new_position}\n\n"
+                        f"🎯 Вы стали ближе к консультации!"
+                    )
+
+                bot.send_message(promoted_user["user_id"], msg, parse_mode='Markdown')
+
+            except Exception as e:
+                print(f"[ERROR] Не удалось уведомить пользователя {promoted_user['user_id']}: {e}")
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📋 Мои записи", callback_data="my_consultations"))
+        markup.add(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu"))
+
+        date_str, time_str = slot_id.split("_")
+        slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = slot_date.strftime("%d.%m.%Y")
+        end_hour = int(time_str.split(':')[0]) + 1
+        time_display = f"{time_str}-{end_hour:02d}:00"
+
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="✅ **Запись отменена**\n\n"
+                 f"📅 Отменена консультация: {formatted_date} в {time_display}\n\n"
+                 "👥 Очередь автоматически продвинута.\n"
+                 "📲 Участники уведомлены о изменениях.",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+
+        print(f"[INFO] Пользователь {user_id} отменил запись на {slot_id}, позиция {cancelled_position}")
+
+    except Exception as e:
+        print(f"[ERROR] Ошибка отмены записи: {e}")
+        bot.answer_callback_query(call.id, "❌ Ошибка при отмене записи")
+
+def confirm_consultation_participation(call, booking_id, stage):
+    """Обрабатывает подтверждение участия пользователем"""
+    from bson import ObjectId
+    booking = consultation_queue_collection.find_one({"_id": ObjectId(booking_id)})
+
+    if not booking or booking["status"] != "waiting":
+        bot.answer_callback_query(call.id, "❌ Запись не найдена или уже неактуальна")
+        return
+
+    update = {"status": f"confirmed_{stage}"}
+    if stage == "day":
+        update["confirmed_day_at"] = datetime.utcnow()
+    elif stage == "hour":
+        update["confirmed_hour_at"] = datetime.utcnow()
+
+    consultation_queue_collection.update_one(
+        {"_id": ObjectId(booking_id)},
+        {"$set": update}
+    )
+
+    bot.answer_callback_query(call.id, "✅ Участие подтверждено!")
+    bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+
+def cancel_consultation_booking(call, booking_id, reason):
+    """Обрабатывает отмену записи пользователем и запускает продвижение очереди"""
+    from bson import ObjectId
+    booking = consultation_queue_collection.find_one({"_id": ObjectId(booking_id)})
+
+    if not booking:
+        bot.answer_callback_query(call.id, "❌ Запись не найдена")
+        return
+
+    slot_id = booking["slot_id"]
+
+    consultation_queue_collection.update_one(
+        {"_id": ObjectId(booking_id)},
+        {"$set": {
+            "status": "cancelled",
+            "cancelled_at": datetime.utcnow(),
+            "cancelled_reason": reason
+        }}
+    )
+
+    # Продвигаем очередь
+    try:
+        from consultation_scheduler import ConsultationScheduler
+        scheduler = ConsultationScheduler()
+        scheduler.promote_queue(slot_id, reason=reason)
+    except Exception as e:
+        print(f"[ERROR] Не удалось продвинуть очередь: {e}")
+
+    bot.answer_callback_query(call.id, "✅ Запись отменена")
+    bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+
 def send_long_message(bot, chat_id, text, reply_markup=None, parse_mode=None):
     """Отправляет длинные сообщения по частям"""
     
@@ -143,6 +537,23 @@ def main(message):
             except Exception as e:
                 print(f"[WARN] Не удалось отправить сообщение админу {admin_id}: {e}")
 
+@bot.message_handler(commands=['slots_today'])
+def view_today_slots(message):
+    ADMIN_USER_IDS = [376068212, 827743984]
+    if message.from_user.id not in ADMIN_USER_IDS:
+        bot.send_message(message.chat.id, "⛔️ У вас нет доступа.")
+        return
+
+    from admin_consultation import AdminConsultationManager
+    manager = AdminConsultationManager(bot)
+    manager.show_today_slots(message)
+
+@bot.message_handler(commands=["admin_consultations"])
+def handle_admin_consultations(message):
+    from admin_consultation import AdminConsultationManager
+    manager = AdminConsultationManager(bot)
+    manager.show_admin_menu(message)
+
 # @bot.callback_query_handler(func=lambda call: True)
 # def handle_callback_query(call):
 #     user_id = call.from_user.id
@@ -177,6 +588,10 @@ def create_main_menu():
         "⚖️ Переписка (платно) 💰",
         callback_data="lawyer_consultation"
     )
+    consultation_btn = types.InlineKeyboardButton(
+        "📅 Бесплатная консультация 🆓",
+        callback_data="free_consultation"
+    )
     credit_btn = types.InlineKeyboardButton(
         "📊 Проверить кредитный отчет (бесплатно) 🆓", 
         callback_data="check_credit_report"
@@ -194,7 +609,7 @@ def create_main_menu():
         callback_data="bot_info"
     )
     
-    markup.add(lawyer_btn, credit_btn, bankruptcy_btn, creditors_list_btn, info_btn)
+    markup.add(lawyer_btn, credit_btn, bankruptcy_btn, creditors_list_btn, consultation_btn, info_btn)
     return markup
 
 def handle_lawyer_consultation(call):
@@ -214,10 +629,10 @@ def handle_lawyer_consultation(call):
         payment_text = (
             "⚖️ **Переписка**\n\n" 
             "💡 Получите профессиональную юридическую помощь:\n"
-            "• Анализ договоров\n"
-            "• Консультации по трудовому праву\n"
-            "• Семейные споры\n"
-            "• Защита прав потребителей\n\n"
+            "• Банкротство физичесикх лиц в Казахстане\n"
+            "• Восстановление платежеспособности\n"
+            "• Внесудебное банкротство\n"
+            "• Судебное банкротство\n\n"
             "💳 Выберите подходящий тариф:"
         )
         
@@ -409,6 +824,57 @@ def handle_creditors_list_request(call):
         reply_markup=markup,
         parse_mode='Markdown'
     )
+
+def handle_free_consultation_request(call):
+    """Обработка запроса на бесплатную консультацию"""
+    user_id = call.from_user.id
+    user_states[user_id] = "selecting_consultation_slot"
+    
+    # Получаем доступные слоты на ближайшие понедельники
+    available_slots = get_available_consultation_slots()
+    
+    if not available_slots:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="📅 **Бесплатная консультация**\n\n"
+                 "❌ К сожалению, на ближайшие недели все слоты заняты.\n"
+                 "Попробуйте позже или воспользуйтесь платной консультацией.",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Создаем кнопки с доступными слотами
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    for slot in available_slots:
+        slot_text = f"📅 {slot['date_formatted']} в {slot['time_display']}"
+        if slot['queue_length'] > 0:
+            slot_text += f" (очередь: {slot['queue_length']})"
+        
+        markup.add(types.InlineKeyboardButton(
+            slot_text,
+            callback_data=f"book_slot_{slot['slot_id']}"
+        ))
+    
+    markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
+    
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="📅 **Бесплатная консультация**\n\n"
+             "🕐 **Расписание:** Каждый понедельник с 14:00 до 17:00\n"
+             "⏱️ **Длительность:** 1 час\n"
+             "📋 **Формат:** Telegram чат с юристом\n\n"
+             "Выберите удобное время:",
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
 # Используем существующую функцию из document_processor
 
 # Также нужно обновить функцию handle_document для поддержки банкротного режима:
@@ -1005,6 +1471,60 @@ def broadcast_message(message):
         print(f"[ERROR broadcast] {e}")
         bot.reply_to(message, f"❌ Ошибка при подготовке рассылки: {str(e)}")
 
+@bot.message_handler(commands=['grant_access'])
+def grant_access(message):
+    """Даёт доступ пользователю"""
+    ADMIN_USER_IDS = [376068212, 827743984]
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+
+    try:
+        # Разбираем команду: /grant_access 1175419316 10
+        parts = message.text.split()
+        user_id = int(parts[1])
+        limit = int(parts[2])
+        
+        # Обновляем в базе данных
+        users_collection.update_one(
+            {"user_id": user_id},
+            {"$set": {"access": True, "message_limit": limit}}
+        )
+        
+        bot.reply_to(message, f"✅ Пользователю {user_id} дано {limit} сообщений")
+        
+    except:
+        bot.reply_to(message, "❌ Формат: /grant_access user_id количество")
+
+@bot.message_handler(commands=['debug_user'])
+def debug_user(message):
+    """Проверяем что в базе данных у пользователя"""
+    ADMIN_USER_IDS = [376068212, 827743984]
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+
+    try:
+        parts = message.text.split()
+        user_id = int(parts[1])
+        
+        # Ищем пользователя в базе
+        user = users_collection.find_one({"user_id": user_id})
+        
+        if user:
+            access = user.get("access", "НЕТ ПОЛЯ")
+            limit = user.get("message_limit", "НЕТ ПОЛЯ")
+            
+            bot.reply_to(message, 
+                f"🔍 Пользователь {user_id}:\n"
+                f"access: {access}\n"
+                f"message_limit: {limit}\n"
+                f"Состояние: {user_states.get(user_id, 'НЕТ')}"
+            )
+        else:
+            bot.reply_to(message, f"❌ Пользователь {user_id} НЕ НАЙДЕН в базе!")
+            
+    except:
+        bot.reply_to(message, "Формат: /debug_user user_id")
+
 @bot.callback_query_handler(func=lambda call: call.data in ["confirm_broadcast", "cancel_broadcast"])
 def handle_broadcast_callback(call):
     """Обработка подтверждения/отмены рассылки"""
@@ -1113,10 +1633,22 @@ def handle_callback_query(call):
         handle_bankruptcy_calculator(call)
     elif call.data == "creditors_list":  # ⭐ НОВАЯ СТРОКА
         handle_creditors_list_request(call)
+    elif call.data == "free_consultation":
+        handle_free_consultation_request(call)
+    elif call.data.startswith("book_slot_"):
+        handle_slot_booking(call)
+    elif call.data == "my_consultations":
+        handle_my_consultations(call)
+    elif call.data.startswith("cancel_booking_"):
+        handle_cancel_booking(call)
     elif call.data == "bot_info":
         handle_bot_info(call)
     elif call.data == "how_to_get_report":
         handle_how_to_get_report(call)
+    elif call.data.startswith("admin_"):
+        from admin_consultation import AdminConsultationManager
+        manager = AdminConsultationManager(bot)
+        manager.handle_admin_callback(call)
     elif call.data.startswith("pay_"):
         handle_payment_callback(call)
     elif call.data == "back_to_menu":
