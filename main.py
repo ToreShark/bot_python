@@ -2,6 +2,7 @@ import telebot
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from admin_consultation import AdminConsultationManager
 from bankruptcy_calculator import analyze_credit_report_for_bankruptcy
 from collateral_parser import extract_collateral_info
 from legal_engine import query
@@ -550,6 +551,12 @@ def view_today_slots(message):
 
 @bot.message_handler(commands=["admin_consultations"])
 def handle_admin_consultations(message):
+    from admin_consultation import AdminConsultationManager
+    manager = AdminConsultationManager(bot)
+    manager.show_admin_menu(message)
+
+@bot.message_handler(commands=['admin'])
+def handle_admin_command(message):
     from admin_consultation import AdminConsultationManager
     manager = AdminConsultationManager(bot)
     manager.show_admin_menu(message)
@@ -1618,6 +1625,22 @@ def handle_broadcast_callback(call):
     # Очищаем состояние
     user_states.pop(call.from_user.id, None)
     bot.answer_callback_query(call.id, f"Рассылка завершена! Отправлено: {sent_count}")
+
+admin_manager = AdminConsultationManager(bot)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_slots_today")
+def handle_admin_slots_today(call):
+    print("DEBUG: call.from_user.id =", call.from_user.id)
+    ADMIN_USER_IDS = [376068212, 827743984]
+    if call.from_user.id not in ADMIN_USER_IDS:
+        bot.send_message(call.message.chat.id, "⛔️ У вас нет доступа.")
+        return
+    admin_manager.show_today_slots(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_slot_details_"))
+def handle_admin_slot_details(call):
+    slot_id = call.data.replace("admin_slot_details_", "")
+    admin_manager.show_slot_details(call, slot_id)
 
 # Также нужно обновить обработчик callback_query_handler, добавив новые условия:
 

@@ -73,9 +73,8 @@ class AdminConsultationManager:
             parse_mode='Markdown'
         )
 
-    def show_today_slots(self, message):
-        """Показывает администратору все слоты на сегодня"""
-        if message.from_user.id not in self.ADMIN_IDS:
+    def show_today_slots(self, message, user_id=None):
+        if user_id is not None and user_id not in self.ADMIN_IDS:
             self.bot.send_message(message.chat.id, "⛔️ У вас нет доступа.")
             return
 
@@ -223,3 +222,64 @@ class AdminConsultationManager:
 
         except Exception as e:
             logger.error(f"❌ Ошибка при изменении времени слота: {e}")
+
+    def show_slot_details(self, call, slot_id):
+        slot = consultation_slots_collection.find_one({"slot_id": slot_id})
+        if not slot:
+            self.bot.answer_callback_query(call.id, "❌ Слот не найден")
+            return
+
+        queue = list(consultation_queue_collection.find(
+            {"slot_id": slot_id, "status": {"$nin": ["cancelled", "completed"]}}
+        ).sort("position", 1))
+
+        date_str = slot.get("date", "—")
+        time_slot = slot.get("time_slot", "—")
+        formatted_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
+
+        header = f"📋 *ДЕТАЛИ СЛОТА:* {formatted_date} {time_slot}\n\n"
+        header += f"👥 *ОЧЕРЕДЬ* ({len(queue)} человек):\n\n"
+
+        medal_icons = ["🥇", "🥈", "🥉"]
+        text_lines = []
+        markup = types.InlineKeyboardMarkup(row_width=2)
+
+        for idx, user in enumerate(queue):
+            user_name = user.get("user_name", "Неизвестно")
+            user_id = user.get("user_id", "—")
+            status = user.get("status", "waiting")
+            booking_id = user.get("_id")
+            registered_at = user.get("registered_at")
+
+            status_map = {
+                "waiting": "ожидает",
+                "confirmed_day": "подтвердил за день",
+                "confirmed_hour": "подтвердил за час"
+            }
+            status_text = status_map.get(status, status)
+
+            reg_dt = registered_at.strftime("%d.%m.%Y %H:%M") if registered_at else "—"
+            icon = medal_icons[idx] if idx < 3 else f"{idx + 1}."
+
+            text_lines.append(
+                f"{icon} *{idx + 1}. {user_name}*\n"
+                f"   📱 ID: `{user_id}`\n"
+                f"   📊 Статус: {status_text}\n"
+                f"   📅 Записался: {reg_dt}"
+            )
+
+            markup.add(
+                types.InlineKeyboardButton("❌ Убрать", callback_data=f"admin_remove_user_{booking_id}"),
+                types.InlineKeyboardButton("📞 Написать", callback_data=f"admin_message_user_{user_id}")
+            )
+
+        markup.add(types.InlineKeyboardButton("🔙 Назад к слотам", callback_data="admin_consultations"))
+
+        full_text = header + "\n\n".join(text_lines)
+        self.bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=full_text,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
