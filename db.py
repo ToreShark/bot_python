@@ -21,7 +21,8 @@ else:
     print(f"[DEBUG] Подключение к MongoDB Atlas (режим: {env})")
 
 # Имя базы данных
-db_name = "tg_bot_dev" if DEBUG_MODE else "telegram_bot"
+# db_name = "telegram_bot" if DEBUG_MODE else "telegram_bot"
+db_name = "telegram_bot"
 db = client[db_name]
 
 # Коллекции, которые будут использоваться

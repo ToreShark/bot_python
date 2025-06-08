@@ -13,18 +13,6 @@ load_dotenv()
 DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() == "true"
 env = "dev" if DEBUG_MODE else "prod"
 
-if DEBUG_MODE:
-    client = MongoClient("mongodb://localhost:27017")
-    print(f"[DEBUG] Подключение к локальной MongoDB (режим {env})")
-else:
-    MONGO_URI = os.getenv("MONGO_URI")
-    client = MongoClient(MONGO_URI)
-    print(f"[DEBUG] Подключение к MongoDB Atlas (режим {env})")
-
-# Используй одинаковое имя базы, если не планируешь держать dev/production базы отдельно
-db_name = "tg_bot_dev" if DEBUG_MODE else "telegram_bot"
-db = client[db_name]
-
 class AdminConsultationManager:
     def __init__(self, bot):
         self.bot = bot
@@ -171,6 +159,7 @@ class AdminConsultationManager:
                 logger.warning(f"Новое время {new_time} должно быть в будущем.")
                 return
 
+            print(f"Current slot status: {slot['status']}")
             # Обновляем слот
             consultation_slots_collection.update_one(
                 {"slot_id": slot_id},
@@ -310,8 +299,10 @@ class AdminConsultationManager:
         end_date_str = end_date.strftime("%Y-%m-%d")
 
         # 2. Ищем все слоты в этом диапазоне
+        # ДОЛЖНО БЫТЬ:
         slots = list(consultation_slots_collection.find({
-            "date": {"$gte": today_str, "$lte": end_date_str}
+            "date": {"$gte": today_str, "$lte": end_date_str},
+            "status": {"$ne": "cancelled"}
         }).sort([("date", 1), ("time_slot", 1)]))
 
         if not slots:
@@ -383,11 +374,16 @@ class AdminConsultationManager:
 
     def show_all_slots(self, call):
         """Показывает администратору сводку по всем слотам."""
-        print("show_all_slots called")
+        # print("show_all_slots called")
         if call.from_user.id not in self.ADMIN_IDS:
             self.bot.answer_callback_query(call.id, "⛔️ У вас нет доступа.")
             return
-
+        
+        # ДОЛЖНО БЫТЬ:
+        # slots = list(consultation_slots_collection.find({
+        #     # "status": {"$ne": "cancelled"}  # ← ТОЛЬКО фильтр статуса
+        # }).sort([("date", 1), ("time_slot", 1)]))
+        # ИСПРАВЛЕННЫЙ запрос - показывает ВСЕ слоты (включая отмененные):
         slots = list(consultation_slots_collection.find({}).sort([("date", 1), ("time_slot", 1)]))
         if not slots:
             self.bot.edit_message_text(
@@ -436,65 +432,49 @@ class AdminConsultationManager:
             parse_mode='Markdown'
         )
         
-    # создать метод show_slot_details(self, call, slot_id)
-    def show_slot_details(self, call, slot_id):
-        """Показывает детали конкретного слота."""
+   # я открываю детали слота и вижу три кнопки: "Детали", "Изменить", "Отменить". 
+   # теперь надо реализовать логику для кнопки "Отменить", чтобы админ мог отменить и пользователю пришло уведомление.
+    def cancel_slot(self, call, slot_id):
+        """Отменяет слот и уведомляет всех участников."""
+        if call.from_user.id not in self.ADMIN_IDS:
+            self.bot.answer_callback_query(call.id, "⛔️ У вас нет доступа.")
+            return
+
         slot = consultation_slots_collection.find_one({"slot_id": slot_id})
         if not slot:
             self.bot.answer_callback_query(call.id, "❌ Слот не найден")
             return
 
-        queue = list(consultation_queue_collection.find(
-            {"slot_id": slot_id, "status": {"$nin": ["cancelled", "completed"]}}
-        ).sort("position", 1))
+        # Получаем всех участников очереди ПЕРЕД удалением
+        queue = list(consultation_queue_collection.find({"slot_id": slot_id}))
+        
+        # УДАЛЯЕМ слот из базы данных (вместо изменения статуса)
+        result = consultation_slots_collection.delete_one({"slot_id": slot_id})
+        print(f"Delete result: deleted_count={result.deleted_count}")
+        
+        # УДАЛЯЕМ все записи в очереди для этого слота
+        queue_result = consultation_queue_collection.delete_many({"slot_id": slot_id})
+        print(f"Queue cleanup: deleted_count={queue_result.deleted_count}")
 
-        date_str = slot.get("date", "—")
-        time_slot = slot.get("time_slot", "—")
-        formatted_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
-
-        header = f"📋 *ДЕТАЛИ СЛОТА:* {formatted_date} {time_slot}\n\n"
-        header += f"👥 *ОЧЕРЕДЬ* ({len(queue)} человек):\n\n"
-
-        medal_icons = ["🥇", "🥈", "🥉"]
-        text_lines = []
-        markup = types.InlineKeyboardMarkup(row_width=2)
-
-        for idx, user in enumerate(queue):
-            user_name = user.get("user_name", "Неизвестно")
-            user_id = user.get("user_id", "—")
-            status = user.get("status", "waiting")
-            booking_id = user.get("_id")
-            registered_at = user.get("registered_at")
-
-            status_map = {
-                "waiting": "ожидает",
-                "confirmed_day": "подтвердил за день",
-                "confirmed_hour": "подтвердил за час"
-            }
-            status_text = status_map.get(status, status)
-
-            reg_dt = registered_at.strftime("%d.%m.%Y %H:%M") if registered_at else "—"
-            icon = medal_icons[idx] if idx < 3 else f"{idx + 1}."
-
-            text_lines.append(
-                f"{icon} *{idx + 1}. {user_name}*\n"
-                f"   📱 ID: `{user_id}`\n"
-                f"   📊 Статус: {status_text}\n"
-                f"   📅 Записался: {reg_dt}"
+        # Уведомляем всех участников
+        for user in queue:
+            user_id = user["user_id"]
+            user_name = user.get("user_name", "Пользователь")
+            text = (
+                f"❌ *Слот отменён*\n\n"
+                f"Здравствуйте, {user_name}!\n\n"
+                f"К сожалению, слот на {slot['date']} в {slot['time_slot']} был отменён.\n"
+                f"Вы можете записаться на другой доступный слот."
             )
+            try:
+                self.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+            except Exception as e:
+                print(f"Не удалось отправить уведомление {user_id}: {e}")
 
-            markup.add(
-                types.InlineKeyboardButton("❌ Убрать", callback_data=f"admin_remove_user_{booking_id}"),
-                types.InlineKeyboardButton("📞 Написать", callback_data=f"admin_message_user_{user_id}"),
-            )
-
-        markup.add(types.InlineKeyboardButton("🔙 Назад к слотам", callback_data="admin_consultations"))
-        full_text = header + "\n\n".join(text_lines)
+        self.bot.answer_callback_query(call.id, "✅ Слот удален и участники уведомлены.")
         self.bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
-            text=full_text,
-            reply_markup=markup,
-            parse_mode="Markdown"
+            text="✅ Слот удален и участники уведомлены.\n💡 Теперь пользователи смогут записаться на это время заново.",
+            reply_markup=None
         )
-        

@@ -1653,6 +1653,11 @@ def handle_admin_all_slots(call):
     manager = AdminConsultationManager(bot)
     manager.show_all_slots(call)
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_cancel_slot_"))
+def handle_admin_cancel_slot(call):
+    slot_id = call.data.replace("admin_cancel_slot_", "")
+    admin_manager.cancel_slot(call, slot_id)
+
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback_query(call):
