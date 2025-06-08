@@ -450,11 +450,9 @@ class AdminConsultationManager:
         
         # УДАЛЯЕМ слот из базы данных (вместо изменения статуса)
         result = consultation_slots_collection.delete_one({"slot_id": slot_id})
-        print(f"Delete result: deleted_count={result.deleted_count}")
         
         # УДАЛЯЕМ все записи в очереди для этого слота
         queue_result = consultation_queue_collection.delete_many({"slot_id": slot_id})
-        print(f"Queue cleanup: deleted_count={queue_result.deleted_count}")
 
         # Уведомляем всех участников
         for user in queue:

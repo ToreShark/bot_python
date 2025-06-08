@@ -107,6 +107,40 @@ def handle_slot_booking(call):
     user_name = f"{first_name} {last_name}".strip()
     
     slot_id = call.data.replace("book_slot_", "")
+
+    # ✅ НОВАЯ ПРОВЕРКА: записан ли пользователь на ЛЮБУЮ консультацию
+    any_active_booking = consultation_queue_collection.find_one({
+        "user_id": user_id,                              # ← ЛЮБОЙ слот этого пользователя
+        "status": {"$nin": ["cancelled", "completed"]}   # ← активные записи
+    })
+    
+    if any_active_booking:
+        # Получаем информацию о существующей записи
+        existing_slot_id = any_active_booking["slot_id"]
+        date_str, time_str = existing_slot_id.split("_")
+        slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = slot_date.strftime("%d.%m.%Y")
+        end_hour = int(time_str.split(':')[0]) + 1
+        time_display = f"{time_str}-{end_hour:02d}:00"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📋 Мои записи", callback_data="my_consultations"))
+        markup.add(types.InlineKeyboardButton("🔙 Назад к слотам", callback_data="free_consultation"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="⚠️ **Вы уже записаны на консультацию**\n\n"
+                 f"📅 Дата: {formatted_date}\n"
+                 f"🕐 Время: {time_display}\n"
+                 f"📍 Место в очереди: {any_active_booking['position']}\n"
+                 f"📊 Статус: {get_status_text(any_active_booking['status'])}\n\n"
+                 f"💡 Можно записаться только на одну консультацию.\n"
+                 f"Отмените текущую запись, чтобы выбрать другое время.",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        return
     
     # Проверка: не записан ли уже пользователь
     existing_booking = consultation_queue_collection.find_one({
