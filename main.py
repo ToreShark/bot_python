@@ -2,6 +2,7 @@ import telebot
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from admin_consultation import AdminConsultationManager, ConsultationNotificationScheduler
 from bankruptcy_calculator import analyze_credit_report_for_bankruptcy
 from collateral_parser import extract_collateral_info
 from legal_engine import query
@@ -23,6 +24,8 @@ print(f"[INFO] Текущий режим: {os.getenv('ENV', 'prod')}")
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
+
+notification_scheduler = ConsultationNotificationScheduler(bot)
 
 # Подключение к MongoDB Atlas
 MONGO_URI = os.getenv("MONGO_URI")
@@ -106,6 +109,40 @@ def handle_slot_booking(call):
     user_name = f"{first_name} {last_name}".strip()
     
     slot_id = call.data.replace("book_slot_", "")
+
+    # ✅ НОВАЯ ПРОВЕРКА: записан ли пользователь на ЛЮБУЮ консультацию
+    any_active_booking = consultation_queue_collection.find_one({
+        "user_id": user_id,                              # ← ЛЮБОЙ слот этого пользователя
+        "status": {"$nin": ["cancelled", "completed"]}   # ← активные записи
+    })
+    
+    if any_active_booking:
+        # Получаем информацию о существующей записи
+        existing_slot_id = any_active_booking["slot_id"]
+        date_str, time_str = existing_slot_id.split("_")
+        slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = slot_date.strftime("%d.%m.%Y")
+        end_hour = int(time_str.split(':')[0]) + 1
+        time_display = f"{time_str}-{end_hour:02d}:00"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📋 Мои записи", callback_data="my_consultations"))
+        markup.add(types.InlineKeyboardButton("🔙 Назад к слотам", callback_data="free_consultation"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="⚠️ **Вы уже записаны на консультацию**\n\n"
+                 f"📅 Дата: {formatted_date}\n"
+                 f"🕐 Время: {time_display}\n"
+                 f"📍 Место в очереди: {any_active_booking['position']}\n"
+                 f"📊 Статус: {get_status_text(any_active_booking['status'])}\n\n"
+                 f"💡 Можно записаться только на одну консультацию.\n"
+                 f"Отмените текущую запись, чтобы выбрать другое время.",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        return
     
     # Проверка: не записан ли уже пользователь
     existing_booking = consultation_queue_collection.find_one({
@@ -550,6 +587,12 @@ def view_today_slots(message):
 
 @bot.message_handler(commands=["admin_consultations"])
 def handle_admin_consultations(message):
+    from admin_consultation import AdminConsultationManager
+    manager = AdminConsultationManager(bot)
+    manager.show_admin_menu(message)
+
+@bot.message_handler(commands=['admin'])
+def handle_admin_command(message):
     from admin_consultation import AdminConsultationManager
     manager = AdminConsultationManager(bot)
     manager.show_admin_menu(message)
@@ -1619,7 +1662,38 @@ def handle_broadcast_callback(call):
     user_states.pop(call.from_user.id, None)
     bot.answer_callback_query(call.id, f"Рассылка завершена! Отправлено: {sent_count}")
 
+# СЛОТЫ АДМИНИСТРАТОРА
+admin_manager = AdminConsultationManager(bot)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_slots_today")
+def handle_admin_slots_today(call):
+    ADMIN_USER_IDS = [376068212, 827743984]
+    if call.from_user.id not in ADMIN_USER_IDS:
+        bot.send_message(call.message.chat.id, "⛔️ У вас нет доступа.")
+        return
+    admin_manager.show_today_slots(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_slot_details_"))
+def handle_admin_slot_details(call):
+    slot_id = call.data.replace("admin_slot_details_", "")
+    admin_manager.show_slot_details(call, slot_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_slots_week")
+def handle_admin_slots_week(call):
+    manager = AdminConsultationManager(bot)
+    manager.show_week_slots(call)
 # Также нужно обновить обработчик callback_query_handler, добавив новые условия:
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_all_slots")
+def handle_admin_all_slots(call):
+    manager = AdminConsultationManager(bot)
+    manager.show_all_slots(call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_cancel_slot_"))
+def handle_admin_cancel_slot(call):
+    slot_id = call.data.replace("admin_cancel_slot_", "")
+    admin_manager.cancel_slot(call, slot_id)
+
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback_query(call):
@@ -1648,7 +1722,25 @@ def handle_callback_query(call):
     elif call.data.startswith("admin_"):
         from admin_consultation import AdminConsultationManager
         manager = AdminConsultationManager(bot)
-        manager.handle_admin_callback(call)
+
+        # Обработка ручной отправки напоминаний
+        if call.data == "admin_send_reminders":
+            manager.manual_send_reminders(call)
+        else:
+            manager.handle_admin_callback(call)
+            
+    elif call.data.startswith("confirm_day_"):
+        booking_id = call.data.replace("confirm_day_", "")
+        confirm_consultation_participation(call, booking_id, "day")
+    elif call.data.startswith("cancel_day_"):
+        booking_id = call.data.replace("cancel_day_", "")
+        cancel_consultation_booking(call, booking_id, "not_available_day_before")
+    elif call.data.startswith("confirm_hour_"):
+        booking_id = call.data.replace("confirm_hour_", "")
+        confirm_consultation_participation(call, booking_id, "hour")
+    elif call.data.startswith("cancel_hour_"):
+        booking_id = call.data.replace("cancel_hour_", "")
+        cancel_consultation_booking(call, booking_id, "not_available_hour_before")
     elif call.data.startswith("pay_"):
         handle_payment_callback(call)
     elif call.data == "back_to_menu":
@@ -1939,6 +2031,10 @@ def handle_channel_message(message):
 # Запуск бота
 if __name__ == "__main__":
     print("[INFO] Бот запущен...")
+     # 🚀 ЗАПУСКАЕМ ПЛАНИРОВЩИК УВЕДОМЛЕНИЙ
+    notification_scheduler.start_scheduler()
+    print("[INFO] 📅 Автоматические уведомления включены")
+    
     while True:
         try:
             bot.polling(none_stop=True, timeout=60)
