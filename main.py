@@ -15,6 +15,7 @@ import requests
 from pydub import AudioSegment
 import openai
 from creditor_handler import process_all_creditors_request
+from smart_handler import SmartHandler
 
 # Парсер кредитных отчетов уже интегрирован в document_processor
 
@@ -24,6 +25,8 @@ print(f"[INFO] Текущий режим: {os.getenv('ENV', 'prod')}")
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
+
+smart_handler = SmartHandler(bot)
 
 notification_scheduler = ConsultationNotificationScheduler(bot)
 
@@ -1961,31 +1964,62 @@ def handle_forwarded(message):
     channel_id = message.forward_from_chat.id
     bot.reply_to(message, f"ID канала: {channel_id}")
 
+# @bot.message_handler(func=lambda message: True)
+# def handle_all_messages(message):
+#     """Обработка всех остальных сообщений"""
+#     user_id = message.from_user.id
+#     current_state = user_states.get(user_id)
+    
+#     if current_state == "lawyer_consultation":
+#         # Обработка вопроса к юристу
+#         handle_lawyer_question(message)
+#     elif current_state == "waiting_credit_report":
+#         # Пользователь в режиме ожидания кредитного отчета
+#         bot.reply_to(
+#             message,
+#             "📊 Пожалуйста, отправьте PDF файл кредитного отчета.\n"
+#             "Текстовые сообщения не обрабатываются в этом режиме."
+#         )
+#     else:
+#         # Предлагаем воспользоваться главным меню
+#         markup = create_main_menu()
+#         bot.send_message(
+#             message.chat.id,
+#             "🤖 Используйте команду /start или выберите услугу:",
+#             reply_markup=markup
+#         )
+
+# ЗАМЕНИТЬ ФУНКЦИЮ handle_all_messages на эту:
+
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
-    """Обработка всех остальных сообщений"""
+    """Улучшенная обработка всех сообщений с умным анализом"""
     user_id = message.from_user.id
     current_state = user_states.get(user_id)
     
     if current_state == "lawyer_consultation":
-        # Обработка вопроса к юристу
+        # Обработка вопроса к юристу (существующая логика)
         handle_lawyer_question(message)
-    elif current_state == "waiting_credit_report":
-        # Пользователь в режиме ожидания кредитного отчета
+    elif current_state in ["waiting_credit_report", "waiting_bankruptcy_report", "waiting_creditors_list"]:
+        # Пользователь в режиме ожидания файла
+        file_type_map = {
+            "waiting_credit_report": "кредитного отчета",
+            "waiting_bankruptcy_report": "отчета для банкротного анализа", 
+            "waiting_creditors_list": "отчета для списка кредиторов"
+        }
+        
+        file_type = file_type_map.get(current_state, "файла")
+        
         bot.reply_to(
             message,
-            "📊 Пожалуйста, отправьте PDF файл кредитного отчета.\n"
-            "Текстовые сообщения не обрабатываются в этом режиме."
+            f"📄 Пожалуйста, отправьте PDF файл {file_type}.\n"
+            "Текстовые сообщения не обрабатываются в этом режиме.\n\n"
+            "💡 Если хотите задать вопрос, используйте /start и выберите подходящую услугу."
         )
     else:
-        # Предлагаем воспользоваться главным меню
-        markup = create_main_menu()
-        bot.send_message(
-            message.chat.id,
-            "🤖 Используйте команду /start или выберите услугу:",
-            reply_markup=markup
-        )
-
+        # 🆕 НОВАЯ УМНАЯ ОБРАБОТКА
+        smart_handler.handle_message(message)
+        print(f"[SMART] Обработано умным способом: {message.text[:30]}...")
 
 @bot.message_handler(commands=['channel_info'])
 def channel_info(message):
@@ -2034,7 +2068,7 @@ if __name__ == "__main__":
      # 🚀 ЗАПУСКАЕМ ПЛАНИРОВЩИК УВЕДОМЛЕНИЙ
     notification_scheduler.start_scheduler()
     print("[INFO] 📅 Автоматические уведомления включены")
-    
+
     while True:
         try:
             bot.polling(none_stop=True, timeout=60)
