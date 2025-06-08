@@ -2,7 +2,7 @@ import telebot
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
-from admin_consultation import AdminConsultationManager
+from admin_consultation import AdminConsultationManager, ConsultationNotificationScheduler
 from bankruptcy_calculator import analyze_credit_report_for_bankruptcy
 from collateral_parser import extract_collateral_info
 from legal_engine import query
@@ -24,6 +24,8 @@ print(f"[INFO] Текущий режим: {os.getenv('ENV', 'prod')}")
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
+
+notification_scheduler = ConsultationNotificationScheduler(bot)
 
 # Подключение к MongoDB Atlas
 MONGO_URI = os.getenv("MONGO_URI")
@@ -1720,7 +1722,25 @@ def handle_callback_query(call):
     elif call.data.startswith("admin_"):
         from admin_consultation import AdminConsultationManager
         manager = AdminConsultationManager(bot)
-        manager.handle_admin_callback(call)
+
+        # Обработка ручной отправки напоминаний
+        if call.data == "admin_send_reminders":
+            manager.manual_send_reminders(call)
+        else:
+            manager.handle_admin_callback(call)
+            
+    elif call.data.startswith("confirm_day_"):
+        booking_id = call.data.replace("confirm_day_", "")
+        confirm_consultation_participation(call, booking_id, "day")
+    elif call.data.startswith("cancel_day_"):
+        booking_id = call.data.replace("cancel_day_", "")
+        cancel_consultation_booking(call, booking_id, "not_available_day_before")
+    elif call.data.startswith("confirm_hour_"):
+        booking_id = call.data.replace("confirm_hour_", "")
+        confirm_consultation_participation(call, booking_id, "hour")
+    elif call.data.startswith("cancel_hour_"):
+        booking_id = call.data.replace("cancel_hour_", "")
+        cancel_consultation_booking(call, booking_id, "not_available_hour_before")
     elif call.data.startswith("pay_"):
         handle_payment_callback(call)
     elif call.data == "back_to_menu":
@@ -2011,6 +2031,10 @@ def handle_channel_message(message):
 # Запуск бота
 if __name__ == "__main__":
     print("[INFO] Бот запущен...")
+     # 🚀 ЗАПУСКАЕМ ПЛАНИРОВЩИК УВЕДОМЛЕНИЙ
+    notification_scheduler.start_scheduler()
+    print("[INFO] 📅 Автоматические уведомления включены")
+    
     while True:
         try:
             bot.polling(none_stop=True, timeout=60)

@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 from db import consultation_slots_collection, consultation_queue_collection
+import threading
+import time
+from datetime import datetime, timedelta
 
 
 load_dotenv()
@@ -475,4 +478,263 @@ class AdminConsultationManager:
             message_id=call.message.message_id,
             text="✅ Слот удален и участники уведомлены.\n💡 Теперь пользователи смогут записаться на это время заново.",
             reply_markup=None
+        )
+    def manual_send_reminders(self, call):
+        """Ручная отправка всех напоминаний (кнопка админа)"""
+        if call.from_user.id not in self.ADMIN_IDS:
+            self.bot.answer_callback_query(call.id, "⛔️ У вас нет доступа.")
+            return
+        
+        try:
+            # Показываем процесс
+            status_msg = self.bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="📤 **Ручная отправка напоминаний**\n\n⏳ Проверяю базу данных...",
+                parse_mode='Markdown'
+            )
+            
+            # Создаем планировщик и запускаем проверку
+            scheduler = ConsultationNotificationScheduler(self.bot)
+            total_sent = scheduler.check_and_send_notifications()
+            
+            # Показываем результат
+            if total_sent > 0:
+                result_text = (
+                    f"📤 **Ручная отправка завершена**\n\n"
+                    f"✅ Отправлено уведомлений: **{total_sent}**\n"
+                    f"📊 Проверка выполнена успешно."
+                )
+            else:
+                result_text = (
+                    f"📤 **Ручная отправка завершена**\n\n"
+                    f"ℹ️ Нет уведомлений для отправки.\n"
+                    f"📊 Все участники уже уведомлены или слоты неактуальны."
+                )
+            
+            from telebot import types
+            self.bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=status_msg.message_id,
+                text=result_text,
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔙 Назад в меню", callback_data="admin_consultations_menu")
+                ),
+                parse_mode='Markdown'
+            )
+            
+            self.bot.answer_callback_query(call.id, f"✅ Отправлено: {total_sent}")
+            
+        except Exception as e:
+            print(f"[ERROR] Ошибка ручной отправки: {e}")
+            self.bot.answer_callback_query(call.id, "❌ Ошибка при отправке напоминаний")
+
+
+class ConsultationNotificationScheduler:
+    def __init__(self, bot):
+        self.bot = bot
+        self.running = False
+        self.thread = None
+
+    def start_scheduler(self):
+        """Запускает планировщик уведомлений"""
+        if not self.running:
+            self.running = True
+            self.thread = threading.Thread(target=self._scheduler_loop, daemon=True)
+            self.thread.start()
+            print("[INFO] 📅 Планировщик консультаций запущен")
+
+    def stop_scheduler(self):
+        """Останавливает планировщик"""
+        self.running = False
+        if self.thread:
+            self.thread.join()
+        print("[INFO] 📅 Планировщик консультаций остановлен")
+
+    def _scheduler_loop(self):
+        """Оптимизированный цикл планировщика"""
+        while self.running:
+            try:
+                now = datetime.now()
+                
+                # 1️⃣ Проверяем уведомления за ДЕНЬ - только в 10:00 и 18:00
+                if now.hour in [10, 18] and now.minute < 5:
+                    print(f"[INFO] 📅 Проверка уведомлений за день: {now.strftime('%H:%M')}")
+                    self.send_day_before_notifications(now)
+                
+                # 2️⃣ Проверяем уведомления за ЧАС - только в рабочее время (12:00-18:00)
+                if 12 <= now.hour <= 18 and now.minute < 5:
+                    print(f"[INFO] ⏰ Проверка уведомлений за час: {now.strftime('%H:%M')}")
+                    self.send_hour_before_notifications(now)
+                
+                # 🌙 НОЧНОЙ РЕЖИМ: проверяем реже
+                if 22 <= now.hour or now.hour <= 6:
+                    sleep_time = 3600  # 1 час ночью
+                else:
+                    sleep_time = 300   # 5 минут днем
+                
+                time.sleep(sleep_time)
+                
+            except Exception as e:
+                print(f"[ERROR] Ошибка в планировщике: {e}")
+                time.sleep(300)
+
+    def check_and_send_notifications(self):
+        """Принудительная проверка (для ручного режима)"""
+        now = datetime.now()
+        print(f"[INFO] 🔧 Ручная проверка уведомлений: {now.strftime('%d.%m.%Y %H:%M')}")
+        
+        day_count = self.send_day_before_notifications(now)
+        hour_count = self.send_hour_before_notifications(now)
+        
+        total = day_count + hour_count
+        print(f"[INFO] ✅ Отправлено уведомлений: {total}")
+        return total
+
+    def send_day_before_notifications(self, now):
+        """Отправляет уведомления за день"""
+        from db import consultation_slots_collection, consultation_queue_collection
+        
+        tomorrow_start = now + timedelta(hours=20)
+        tomorrow_date = tomorrow_start.strftime("%Y-%m-%d")
+        
+        bookings_to_notify = list(consultation_queue_collection.find({
+            "status": {"$nin": ["cancelled", "completed"]},
+            "notifications_sent.day_before": False,
+            "slot_id": {"$regex": f"^{tomorrow_date}"}
+        }))
+
+        sent_count = 0
+        for booking in bookings_to_notify:
+            try:
+                self._send_day_before_notification(booking)
+                consultation_queue_collection.update_one(
+                    {"_id": booking["_id"]},
+                    {"$set": {"notifications_sent.day_before": True}}
+                )
+                sent_count += 1
+                
+            except Exception as e:
+                print(f"[ERROR] Ошибка дневного уведомления {booking['user_id']}: {e}")
+
+        return sent_count
+
+    def send_hour_before_notifications(self, now):
+        """Отправляет уведомления за час"""
+        from db import consultation_slots_collection, consultation_queue_collection
+        
+        current_date = now.strftime("%Y-%m-%d")
+        current_hour = now.hour
+        next_hours = [(current_hour + i) % 24 for i in range(3)]
+        
+        sent_count = 0
+        
+        for hour in next_hours:
+            slot_pattern = f"{current_date}_{hour:02d}:00"
+            
+            bookings_to_notify = list(consultation_queue_collection.find({
+                "status": {"$nin": ["cancelled", "completed"]},
+                "notifications_sent.hour_before": False,
+                "slot_id": slot_pattern
+            }))
+
+            for booking in bookings_to_notify:
+                try:
+                    slot_id = booking["slot_id"]
+                    date_str, time_str = slot_id.split("_")
+                    consultation_time = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+                    
+                    time_diff = consultation_time - now
+                    
+                    if timedelta(minutes=50) <= time_diff <= timedelta(minutes=70):
+                        self._send_hour_before_notification(booking)
+                        consultation_queue_collection.update_one(
+                            {"_id": booking["_id"]},
+                            {"$set": {"notifications_sent.hour_before": True}}
+                        )
+                        sent_count += 1
+                        
+                except Exception as e:
+                    print(f"[ERROR] Ошибка часового уведомления {booking['user_id']}: {e}")
+
+        return sent_count
+
+    def _send_day_before_notification(self, booking):
+        """Отправляет уведомление за день"""
+        from telebot import types
+        
+        user_id = booking["user_id"]
+        user_name = booking.get("user_name", "Пользователь")
+        slot_id = booking["slot_id"]
+        position = booking["position"]
+        
+        date_str, time_str = slot_id.split("_")
+        slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = slot_date.strftime("%d.%m.%Y")
+        end_hour = int(time_str.split(':')[0]) + 1
+        time_display = f"{time_str}-{end_hour:02d}:00"
+        
+        text = (
+            f"📅 **Напоминание о консультации**\n\n"
+            f"Здравствуйте, {user_name}!\n\n"
+            f"⏰ Завтра у вас консультация:\n"
+            f"📅 Дата: {formatted_date} (понедельник)\n"
+            f"🕐 Время: {time_display}\n"
+            f"📍 Ваше место в очереди: {position}\n\n"
+            f"🔔 **Пожалуйста, подтвердите участие!**"
+        )
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Подтверждаю участие", 
+                                     callback_data=f"confirm_day_{booking['_id']}"),
+            types.InlineKeyboardButton("❌ Не смогу участвовать", 
+                                     callback_data=f"cancel_day_{booking['_id']}")
+        )
+        
+        self.bot.send_message(
+            chat_id=user_id,
+            text=text,
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+
+    def _send_hour_before_notification(self, booking):
+        """Отправляет уведомление за час"""
+        from telebot import types
+        
+        user_id = booking["user_id"]
+        user_name = booking.get("user_name", "Пользователь")
+        slot_id = booking["slot_id"]
+        position = booking["position"]
+        
+        date_str, time_str = slot_id.split("_")
+        slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = slot_date.strftime("%d.%m.%Y")
+        end_hour = int(time_str.split(':')[0]) + 1
+        time_display = f"{time_str}-{end_hour:02d}:00"
+        
+        text = (
+            f"🔔 **Консультация через час!**\n\n"
+            f"Здравствуйте, {user_name}!\n\n"
+            f"⏰ Ваша консультация начнется через час:\n"
+            f"📅 Сегодня, {formatted_date}\n"
+            f"🕐 Время: {time_display}\n"
+            f"📍 Ваше место в очереди: {position}\n\n"
+            f"🚀 **Подготовьтесь к консультации!**"
+        )
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Готов к консультации", 
+                                     callback_data=f"confirm_hour_{booking['_id']}"),
+            types.InlineKeyboardButton("❌ Отменить участие", 
+                                     callback_data=f"cancel_hour_{booking['_id']}")
+        )
+        
+        self.bot.send_message(
+            chat_id=user_id,
+            text=text,
+            reply_markup=markup,
+            parse_mode='Markdown'
         )
