@@ -5,15 +5,25 @@ from pymongo import MongoClient
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
+from db import consultation_slots_collection, consultation_queue_collection
+
 
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGO_URI")
-client = MongoClient(MONGO_URI)
-db = client["telegram_bot"]
+DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() == "true"
+env = "dev" if DEBUG_MODE else "prod"
 
-consultation_slots_collection = db["consultation_slots"]
-consultation_queue_collection = db["consultation_queue"]
+if DEBUG_MODE:
+    client = MongoClient("mongodb://localhost:27017")
+    print(f"[DEBUG] Подключение к локальной MongoDB (режим {env})")
+else:
+    MONGO_URI = os.getenv("MONGO_URI")
+    client = MongoClient(MONGO_URI)
+    print(f"[DEBUG] Подключение к MongoDB Atlas (режим {env})")
+
+# Используй одинаковое имя базы, если не планируешь держать dev/production базы отдельно
+db_name = "tg_bot_dev" if DEBUG_MODE else "telegram_bot"
+db = client[db_name]
 
 class AdminConsultationManager:
     def __init__(self, bot):
@@ -29,6 +39,8 @@ class AdminConsultationManager:
         markup.add(
             types.InlineKeyboardButton("📅 Слоты на сегодня", callback_data="admin_slots_today"),
             types.InlineKeyboardButton("🗓 Слоты на неделю", callback_data="admin_slots_week"),
+            # сводка по всем слотам /all_consultations
+            types.InlineKeyboardButton("📅 Сводка по всем слотам", callback_data="admin_all_slots"),
             types.InlineKeyboardButton("➕ Добавить слот", callback_data="admin_add_slot"),
             types.InlineKeyboardButton("📋 Очередь по слоту", callback_data="admin_view_queue"),
             types.InlineKeyboardButton("📤 Ручная отправка напоминаний", callback_data="admin_send_reminders")
@@ -82,7 +94,7 @@ class AdminConsultationManager:
         today_str = today.strftime("%Y-%m-%d")
         readable_date = today.strftime("%d.%m.%Y")
 
-        slots = list(consultation_slots_collection.find({"date": today_str}).sort("time_slot", 1))
+        slots = list(consultation_queue_collection.find({"date": today_str}).sort("time_slot", 1))
 
         if not slots:
             self.bot.send_message(message.chat.id, f"📅 На сегодня ({readable_date}) слоты не найдены.")
@@ -283,3 +295,206 @@ class AdminConsultationManager:
             reply_markup=markup,
             parse_mode="Markdown"
         )
+
+    def show_week_slots(self, call):
+        """Показывает администратору слоты на 7 дней вперед с кнопками управления."""
+        if call.from_user.id not in self.ADMIN_IDS:
+            self.bot.answer_callback_query(call.id, "⛔️ У вас нет доступа.")
+            return
+
+        # 1. Определяем диапазон дат
+        today = datetime.now()
+        end_date = today + timedelta(days=6)
+        
+        today_str = today.strftime("%Y-%m-%d")
+        end_date_str = end_date.strftime("%Y-%m-%d")
+
+        # 2. Ищем все слоты в этом диапазоне
+        slots = list(consultation_slots_collection.find({
+            "date": {"$gte": today_str, "$lte": end_date_str}
+        }).sort([("date", 1), ("time_slot", 1)]))
+
+        if not slots:
+            self.bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="📅 На предстоящие 7 дней нет запланированных слотов."
+            )
+            return
+
+        # 3. Показываем каждый слот отдельной карточкой
+        for slot in slots:
+            slot_id = slot["slot_id"]
+            time_slot = slot["time_slot"]
+            status = slot["status"]
+            date_str = slot["date"]
+            
+            # Маркер даты
+            formatted_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
+            date_marker = f"🔹 СЕГОДНЯ ({formatted_date})" if date_str == today_str else f"🔸 {formatted_date}"
+            
+            # Очередь
+            queue = list(consultation_queue_collection.find({
+                "slot_id": slot_id,
+                "status": {"$nin": ["cancelled", "completed"]}
+            }).sort("position", 1))
+            queue_count = len(queue)
+            
+            # Первый в очереди
+            if queue:
+                first_user = queue[0]
+                name = first_user.get("user_name", "Неизвестно")
+                stat = first_user.get("status", "waiting")
+                if stat == "waiting":
+                    status_text = "ожидает"
+                elif stat == "confirmed_day":
+                    status_text = "подтвердил за день"
+                elif stat == "confirmed_hour":
+                    status_text = "подтвердил за час"
+                else:
+                    status_text = stat
+                first_line = f"🥇 Первый: {name} ({status_text})"
+            else:
+                first_line = "🥇 Первый: —"
+            
+            # Текст слота
+            text = (
+                f"{date_marker}\n"
+                f"🕐 *{time_slot}*\n"
+                f"👥 Очередь: {queue_count} человек(а)\n"
+                f"{first_line}\n"
+                f"📊 Статус: *{status}*"
+            )
+            
+            # Кнопки управления
+            markup = types.InlineKeyboardMarkup(row_width=3)
+            markup.add(
+                types.InlineKeyboardButton("📋 Детали", callback_data=f"admin_slot_details_{slot_id}"),
+                types.InlineKeyboardButton("⚙️ Изменить", callback_data=f"admin_edit_slot_{slot_id}"),
+                types.InlineKeyboardButton("❌ Отменить", callback_data=f"admin_cancel_slot_{slot_id}")
+            )
+            
+            self.bot.send_message(
+                chat_id=call.message.chat.id,
+                text=text,
+                reply_markup=markup,
+                parse_mode='Markdown'
+            )
+
+    def show_all_slots(self, call):
+        """Показывает администратору сводку по всем слотам."""
+        print("show_all_slots called")
+        if call.from_user.id not in self.ADMIN_IDS:
+            self.bot.answer_callback_query(call.id, "⛔️ У вас нет доступа.")
+            return
+
+        slots = list(consultation_slots_collection.find({}).sort([("date", 1), ("time_slot", 1)]))
+        if not slots:
+            self.bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="📅 На данный момент нет доступных слотов."
+            )
+            return
+
+        text_lines = ["📅 *ВСЕ КОНСУЛЬТАЦИИ*"]
+        total_registrations = 0
+
+        for slot in slots:
+            slot_id = slot["slot_id"]
+            date_str = slot["date"]
+            time_slot = slot["time_slot"]
+
+            # Получаем всех активных участников очереди
+            queue = list(consultation_queue_collection.find({
+                "slot_id": slot_id,
+                "status": {"$nin": ["cancelled", "completed"]}
+            }))
+            
+            queue_count = len(queue)
+            total_registrations += queue_count
+            
+            # Считаем подтвердивших
+            confirmed_count = 0
+            for user in queue:
+                if user.get("status") in ["confirmed_day", "confirmed_hour"]:
+                    confirmed_count += 1
+            
+            formatted_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
+            text_lines.append(f"🗓️ *{formatted_date}* 🕐 `{time_slot}` → {queue_count} чел. ({confirmed_count} подтв.)")
+
+        text_lines.append(f"\nВсего записей: *{total_registrations}* человек.")
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="admin_consultations_menu"))
+
+        self.bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="\n".join(text_lines),
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        
+    # создать метод show_slot_details(self, call, slot_id)
+    def show_slot_details(self, call, slot_id):
+        """Показывает детали конкретного слота."""
+        slot = consultation_slots_collection.find_one({"slot_id": slot_id})
+        if not slot:
+            self.bot.answer_callback_query(call.id, "❌ Слот не найден")
+            return
+
+        queue = list(consultation_queue_collection.find(
+            {"slot_id": slot_id, "status": {"$nin": ["cancelled", "completed"]}}
+        ).sort("position", 1))
+
+        date_str = slot.get("date", "—")
+        time_slot = slot.get("time_slot", "—")
+        formatted_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
+
+        header = f"📋 *ДЕТАЛИ СЛОТА:* {formatted_date} {time_slot}\n\n"
+        header += f"👥 *ОЧЕРЕДЬ* ({len(queue)} человек):\n\n"
+
+        medal_icons = ["🥇", "🥈", "🥉"]
+        text_lines = []
+        markup = types.InlineKeyboardMarkup(row_width=2)
+
+        for idx, user in enumerate(queue):
+            user_name = user.get("user_name", "Неизвестно")
+            user_id = user.get("user_id", "—")
+            status = user.get("status", "waiting")
+            booking_id = user.get("_id")
+            registered_at = user.get("registered_at")
+
+            status_map = {
+                "waiting": "ожидает",
+                "confirmed_day": "подтвердил за день",
+                "confirmed_hour": "подтвердил за час"
+            }
+            status_text = status_map.get(status, status)
+
+            reg_dt = registered_at.strftime("%d.%m.%Y %H:%M") if registered_at else "—"
+            icon = medal_icons[idx] if idx < 3 else f"{idx + 1}."
+
+            text_lines.append(
+                f"{icon} *{idx + 1}. {user_name}*\n"
+                f"   📱 ID: `{user_id}`\n"
+                f"   📊 Статус: {status_text}\n"
+                f"   📅 Записался: {reg_dt}"
+            )
+
+            markup.add(
+                types.InlineKeyboardButton("❌ Убрать", callback_data=f"admin_remove_user_{booking_id}"),
+                types.InlineKeyboardButton("📞 Написать", callback_data=f"admin_message_user_{user_id}"),
+            )
+
+        markup.add(types.InlineKeyboardButton("🔙 Назад к слотам", callback_data="admin_consultations"))
+        full_text = header + "\n\n".join(text_lines)
+        self.bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=full_text,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        

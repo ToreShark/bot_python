@@ -1626,11 +1626,11 @@ def handle_broadcast_callback(call):
     user_states.pop(call.from_user.id, None)
     bot.answer_callback_query(call.id, f"Рассылка завершена! Отправлено: {sent_count}")
 
+# СЛОТЫ АДМИНИСТРАТОРА
 admin_manager = AdminConsultationManager(bot)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_slots_today")
 def handle_admin_slots_today(call):
-    print("DEBUG: call.from_user.id =", call.from_user.id)
     ADMIN_USER_IDS = [376068212, 827743984]
     if call.from_user.id not in ADMIN_USER_IDS:
         bot.send_message(call.message.chat.id, "⛔️ У вас нет доступа.")
@@ -1642,7 +1642,17 @@ def handle_admin_slot_details(call):
     slot_id = call.data.replace("admin_slot_details_", "")
     admin_manager.show_slot_details(call, slot_id)
 
+@bot.callback_query_handler(func=lambda call: call.data == "admin_slots_week")
+def handle_admin_slots_week(call):
+    manager = AdminConsultationManager(bot)
+    manager.show_week_slots(call)
 # Также нужно обновить обработчик callback_query_handler, добавив новые условия:
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_all_slots")
+def handle_admin_all_slots(call):
+    manager = AdminConsultationManager(bot)
+    manager.show_all_slots(call)
+
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback_query(call):
