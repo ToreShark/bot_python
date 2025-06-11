@@ -104,6 +104,19 @@ def get_available_consultation_slots():
 
     return available_slots
 
+def get_next_available_slot():
+    """Возвращает ближайший свободный слот"""
+    slots = get_available_consultation_slots()
+    if not slots:
+        return None
+    now = datetime.now()
+    sorted_slots = sorted(slots, key=lambda s: datetime.strptime(f"{s['date']} {s['time_display'].split('-')[0]}", "%Y-%m-%d %H:%M"))
+    for slot in sorted_slots:
+        slot_start = datetime.strptime(f"{slot['date']} {slot['time_display'].split('-')[0]}", "%Y-%m-%d %H:%M")
+        if slot_start > now:
+            return slot
+    return None
+
 def handle_slot_booking(call):
     """Обработка записи пользователя на конкретный слот"""
     user_id = call.from_user.id
@@ -239,6 +252,7 @@ def get_status_text(status):
         "waiting": "Ожидание",
         "confirmed_day": "Подтвержден (за день)",
         "confirmed_hour": "Подтвержден (за час)",
+        "missed": "Не явился",
         "cancelled": "Отменен",
         "completed": "Завершен"
     }
@@ -475,6 +489,83 @@ def cancel_consultation_booking(call, booking_id, reason):
 
     bot.answer_callback_query(call.id, "✅ Запись отменена")
     bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+
+def handle_reschedule_auto(call, booking_id):
+    """Автоматическая запись пользователя на следующий свободный слот"""
+    from bson import ObjectId
+    booking = consultation_queue_collection.find_one({"_id": ObjectId(booking_id)})
+    if not booking:
+        bot.answer_callback_query(call.id, "❌ Запись не найдена")
+        return
+
+    next_slot = get_next_available_slot()
+    if not next_slot:
+        bot.answer_callback_query(call.id, "❌ Нет свободных слотов")
+        return
+
+    slot_id = next_slot['slot_id']
+    queue_len = consultation_queue_collection.count_documents({
+        "slot_id": slot_id,
+        "status": {"$nin": ["cancelled", "completed"]}
+    })
+
+    consultation_queue_collection.update_one(
+        {"_id": ObjectId(booking_id)},
+        {"$set": {
+            "slot_id": slot_id,
+            "position": queue_len + 1,
+            "status": "waiting",
+            "registered_at": datetime.utcnow(),
+            "confirmed_day_at": None,
+            "confirmed_hour_at": None,
+            "notifications_sent": {"day_before": False, "hour_before": False},
+            "cancelled_at": None,
+            "cancelled_reason": None
+        }}
+    )
+
+    date_str = next_slot['date']
+    time_disp = next_slot['time_display']
+    formatted_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📋 Мои записи", callback_data="my_consultations"))
+    markup.add(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu"))
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=(
+            "✅ Вы записаны на следующий свободный слот!\n\n"
+            f"📅 {formatted_date} {time_disp}\n"
+            f"📍 Место в очереди: {queue_len + 1}"
+        ),
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+def handle_reschedule_manual(call, booking_id):
+    """Показывает пользователю доступные слоты для ручного выбора"""
+    from bson import ObjectId
+    if not consultation_queue_collection.find_one({"_id": ObjectId(booking_id)}):
+        bot.answer_callback_query(call.id, "❌ Запись не найдена")
+        return
+    handle_free_consultation_request(call)
+
+def handle_reschedule_cancel(call, booking_id):
+    """Полностью отменяет запись"""
+    from bson import ObjectId
+    consultation_queue_collection.update_one(
+        {"_id": ObjectId(booking_id)},
+        {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow(), "cancelled_reason": "user_cancel"}}
+    )
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="❌ Запись отменена. Вы всегда можете записаться снова командой /start",
+        parse_mode='Markdown'
+    )
 
 def send_long_message(bot, chat_id, text, reply_markup=None, parse_mode=None):
     """Отправляет длинные сообщения по частям"""
@@ -1770,6 +1861,15 @@ def handle_callback_query(call):
     elif call.data.startswith("cancel_hour_"):
         booking_id = call.data.replace("cancel_hour_", "")
         cancel_consultation_booking(call, booking_id, "not_available_hour_before")
+    elif call.data.startswith("reschedule_auto_"):
+        booking_id = call.data.replace("reschedule_auto_", "")
+        handle_reschedule_auto(call, booking_id)
+    elif call.data.startswith("reschedule_manual_"):
+        booking_id = call.data.replace("reschedule_manual_", "")
+        handle_reschedule_manual(call, booking_id)
+    elif call.data.startswith("reschedule_cancel_"):
+        booking_id = call.data.replace("reschedule_cancel_", "")
+        handle_reschedule_cancel(call, booking_id)
     elif call.data.startswith("pay_"):
         handle_payment_callback(call)
     elif call.data == "back_to_menu":
