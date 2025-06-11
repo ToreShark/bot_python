@@ -2,7 +2,7 @@ import telebot
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
-from admin_consultation import AdminConsultationManager, ConsultationNotificationScheduler
+from admin_consultation import DEBUG_MODE, AdminConsultationManager, ConsultationNotificationScheduler
 from bankruptcy_calculator import analyze_credit_report_for_bankruptcy
 from collateral_parser import extract_collateral_info
 from legal_engine import query
@@ -2073,10 +2073,31 @@ def handle_all_messages(message):
         # Сбрасываем состояние админа
         user_states.pop(user_id, None)
         return
-    else:
-        # 🆕 НОВАЯ УМНАЯ ОБРАБОТКА
-        smart_handler.handle_message(message)
-        # print(f"[SMART] Обработано умным способом: {message.text[:30]}...")
+    # ❹ НОВАЯ ЛОГИКА: Проверяем message_limit для автоматической юридической консультации
+    try:
+        user = users_collection.find_one({"user_id": user_id})
+        
+        # # Если у пользователя есть доступ и лимит > 0, сразу обрабатываем как юридический вопрос
+        # if user and user.get("access", False) and user.get("message_limit", 0) > 0:
+        #     if DEBUG_MODE:
+        #         # print(f"[DEBUG] Пользователь {user_id} имеет доступ (лимит: {user.get('message_limit', 0)}), обрабатываем как юридический вопрос")
+            
+        #     handle_lawyer_question(message)
+        #     return
+        if user and user.get("message_limit", 0) > 0:
+            handle_lawyer_question(message)
+            return
+            
+    except Exception as e:
+        if DEBUG_MODE:
+            print(f"[ERROR] Ошибка проверки пользователя в БД: {e}")
+        # Продолжаем обработку дальше при ошибке БД
+    
+    # ❺ FALLBACK: Пользователи без доступа или с лимитом = 0 → умная обработка
+    if DEBUG_MODE:
+        print(f"[DEBUG] Пользователь {user_id} без доступа или лимит = 0, используем smart_handler")
+    
+    smart_handler.handle_message(message)
 
 @bot.message_handler(commands=['channel_info'])
 def channel_info(message):
