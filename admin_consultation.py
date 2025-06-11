@@ -604,6 +604,11 @@ class ConsultationNotificationScheduler:
                 if 12 <= now.hour <= 18 and now.minute < 5:
                     print(f"[INFO] ⏰ Проверка уведомлений за час: {now.strftime('%H:%M')}")
                     self.send_hour_before_notifications(now)
+
+                # 3️⃣ Обрабатываем завершенные консультации (16-18 каждый час)
+                if now.hour in [16, 17, 18] and now.minute < 5:
+                    print(f"[INFO] 🧹 Очистка завершенных слотов: {now.strftime('%H:%M')}")
+                    self.cleanup_completed_consultations()
                 
                 # 🌙 НОЧНОЙ РЕЖИМ: проверяем реже
                 if 22 <= now.hour or now.hour <= 6:
@@ -656,6 +661,102 @@ class ConsultationNotificationScheduler:
                 print(f"[ERROR] Ошибка дневного уведомления {booking['user_id']}: {e}")
 
         return sent_count
+
+    def cleanup_completed_consultations(self):
+        """Обрабатывает консультации, время которых прошло"""
+        from db import consultation_slots_collection, consultation_queue_collection
+        from bson import ObjectId
+        now = datetime.now()
+        threshold = now - timedelta(hours=1)
+
+        slots = list(consultation_slots_collection.find({}))
+        for slot in slots:
+            slot_id = slot.get("slot_id")
+            if not slot_id:
+                continue
+            date_str, time_str = slot_id.split("_")
+            slot_start = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+            slot_end = slot_start + timedelta(hours=1)
+
+            if slot_end > threshold:
+                continue  # еще не завершился
+
+            queue = list(consultation_queue_collection.find({
+                "slot_id": slot_id,
+                "status": {"$nin": ["cancelled", "completed", "missed"]}
+            }).sort("position", 1))
+
+            if not queue:
+                continue
+
+            for idx, booking in enumerate(queue):
+                booking_id = booking["_id"]
+                if idx == 0:
+                    if booking["status"] == "confirmed_hour":
+                        new_status = "completed"
+                    elif booking["status"] == "waiting":
+                        new_status = "missed"
+                    else:
+                        new_status = booking["status"]
+
+                    consultation_queue_collection.update_one(
+                        {"_id": ObjectId(booking_id)},
+                        {"$set": {"status": new_status}}
+                    )
+                else:
+                    consultation_queue_collection.update_one(
+                        {"_id": ObjectId(booking_id)},
+                        {"$set": {
+                            "status": "cancelled",
+                            "cancelled_at": datetime.utcnow(),
+                            "cancelled_reason": "slot_completed"
+                        }}
+                    )
+                    try:
+                        self._send_reschedule_notification(booking)
+                    except Exception as e:
+                        print(f"[WARN] Не удалось отправить уведомление {booking.get('user_id')}: {e}")
+
+    def _send_reschedule_notification(self, booking):
+        """Уведомляет пользователя о переносе после завершения слота"""
+        from telebot import types
+
+        user_id = booking["user_id"]
+        user_name = booking.get("user_name", "Пользователь")
+        slot_id = booking["slot_id"]
+        position = booking["position"]
+
+        date_str, time_str = slot_id.split("_")
+        slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = slot_date.strftime("%d.%m.%Y")
+        end_hour = int(time_str.split(":")[0]) + 1
+        time_display = f"{time_str}-{end_hour:02d}:00"
+
+        text = (
+            "🕐 Консультация завершена\n\n"
+            f"Здравствуйте, {user_name}!\n\n"
+            f"Консультация {formatted_date} {time_display} завершилась. "
+            f"Вы были {position}-м в очереди.\n\n"
+            "🎯 Что хотите сделать дальше?"
+        )
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("✅ Записаться автоматически", callback_data=f"reschedule_auto_{booking['_id']}")
+        )
+        markup.add(
+            types.InlineKeyboardButton("🗓️ Выбрать время самостоятельно", callback_data=f"reschedule_manual_{booking['_id']}")
+        )
+        markup.add(
+            types.InlineKeyboardButton("❌ Отменить запись", callback_data=f"reschedule_cancel_{booking['_id']}")
+        )
+
+        self.bot.send_message(
+            chat_id=user_id,
+            text=text,
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
 
     def send_hour_before_notifications(self, now):
         """Отправляет уведомления за час"""
