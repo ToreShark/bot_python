@@ -2076,7 +2076,7 @@ def handle_all_messages(message):
     else:
         # 🆕 НОВАЯ УМНАЯ ОБРАБОТКА
         smart_handler.handle_message(message)
-        print(f"[SMART] Обработано умным способом: {message.text[:30]}...")
+        # print(f"[SMART] Обработано умным способом: {message.text[:30]}...")
 
 @bot.message_handler(commands=['channel_info'])
 def channel_info(message):
