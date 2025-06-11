@@ -1881,6 +1881,9 @@ def handle_callback_query(call):
             text="🏠 Главное меню\nВыберите нужную услугу:",
             reply_markup=main_menu_markup
         )
+        # Сбрасываем состояние пользователя
+        user_states.pop(user_id, None)
+        print(f"[DEBUG] Состояние пользователя {user_id} сброшено")
     # ДОБАВИТЬ ЭТИ СТРОКИ:
     elif call.data in ["confirm_broadcast", "cancel_broadcast"]:
         handle_broadcast_callback(call)
@@ -2121,14 +2124,13 @@ def handle_forwarded(message):
 def handle_all_messages(message):
     """Улучшенная обработка всех сообщений с умным анализом"""
     user_id = message.from_user.id
-    # print(f"[TRACE] handle_all_messages вызван для {user_id}")
-    # print(f"[TRACE] id(user_states): {id(user_states)}") 
     current_state = user_states.get(user_id)
-    # print(f"[DEBUG] Состояние: {current_state}")
 
-    # 🔧 ОТЛАДКА: проверяем состояние админа
-    # print(f"[DEBUG] Пользователь {user_id}: состояние = '{current_state}'")
-    # print(f"[DEBUG] Сообщение: '{message.text}'")
+    # 🔧 ОТЛАДКА
+    print(f"[DEBUG] handle_all_messages вызван для пользователя {user_id}")
+    print(f"[DEBUG] Текущее состояние: '{current_state}'")
+    print(f"[DEBUG] Сообщение: '{message.text}'")
+    print(f"[DEBUG] Содержимое user_states: {user_states}")
     
     if current_state == "lawyer_consultation":
         # Обработка вопроса к юристу (существующая логика)
