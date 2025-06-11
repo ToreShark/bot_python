@@ -120,11 +120,21 @@ class SmartHandler:
 
     def handle_message(self, message):
         """Основная функция - обрабатываем сообщение пользователя"""
-        # ✅ ДОБАВИТЬ ЭТУ ПРОВЕРКУ:
         ADMIN_IDS = [376068212, 827743984]
-        if message.from_user.id in ADMIN_IDS:
-            print(f"[SMART] Пропускаю админа {message.from_user.id}")
-            return  # НЕ ОБРАБАТЫВАЕМ СООБЩЕНИЯ ОТ АДМИНОВ
+
+        # ✅ НОВАЯ ЛОГИКА: проверяем режим админа
+        user_id = message.from_user.id
+        if user_id in ADMIN_IDS:
+            # Импортируем из main.py текущее состояние
+            import main
+            admin_mode = main.user_states.get(user_id)
+
+            if admin_mode != "user_simulation":
+                print(f"[SMART] Пропускаю админа {user_id} (админ-режим)")
+                return
+            else:
+                print(f"[SMART] Админ {user_id} в пользовательском режиме")
+
         # 1. Анализируем сообщение
         category = self.analyze_message(message.text)
         

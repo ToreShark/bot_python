@@ -2093,6 +2093,23 @@ def handle_forwarded(message):
     channel_id = message.forward_from_chat.id
     bot.reply_to(message, f"ID канала: {channel_id}")
 
+# Команда для переключения режима администратора
+@bot.message_handler(commands=['user_mode'])
+def toggle_user_mode(message):
+    ADMIN_IDS = [376068212, 827743984]
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    user_id = message.from_user.id
+    current_mode = user_states.get(user_id, "admin")
+
+    if current_mode == "user_simulation":
+        user_states.pop(user_id, None)
+        bot.reply_to(message, "🔧 Админ-режим включен")
+    else:
+        user_states[user_id] = "user_simulation"
+        bot.reply_to(message, "👤 Пользовательский режим включен\n\nТеперь можете тестировать SmartHandler")
+
 # @bot.message_handler(func=lambda message: True)
 # def handle_all_messages(message):
 #     """Обработка всех остальных сообщений"""
