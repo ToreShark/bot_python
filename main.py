@@ -26,7 +26,8 @@ print(f"[INFO] Текущий режим: {os.getenv('ENV', 'prod')}")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 CHANNEL_ID = -1002275474152  # ID канала для проверки связи
-smart_handler = SmartHandler(bot)
+user_states = {}  # Для отслеживания состояний пользователей
+smart_handler = SmartHandler(bot, user_states)
 
 notification_scheduler = ConsultationNotificationScheduler(bot)
 
@@ -50,7 +51,6 @@ temp_videos_collection = db['temp_videos']
 
 # Простая антивандальная структура: последний доступ
 user_last_access = {}
-user_states = {}  # Для отслеживания состояний пользователей
 def get_available_consultation_slots():
     """Получает доступные слоты консультаций на ближайшие 3 понедельника"""
     from datetime import datetime, timedelta
@@ -2092,6 +2092,23 @@ def handle_forwarded(message):
         
     channel_id = message.forward_from_chat.id
     bot.reply_to(message, f"ID канала: {channel_id}")
+
+# Команда для переключения режима администратора
+@bot.message_handler(commands=['user_mode'])
+def toggle_user_mode(message):
+    ADMIN_IDS = [376068212, 827743984]
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    user_id = message.from_user.id
+    current_mode = user_states.get(user_id, "admin")
+
+    if current_mode == "user_simulation":
+        user_states.pop(user_id, None)
+        bot.reply_to(message, "🔧 Админ-режим включен")
+    else:
+        user_states[user_id] = "user_simulation"
+        bot.reply_to(message, "👤 Пользовательский режим включен\n\nТеперь можете тестировать SmartHandler")
 
 # @bot.message_handler(func=lambda message: True)
 # def handle_all_messages(message):
