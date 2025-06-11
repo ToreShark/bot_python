@@ -4,8 +4,9 @@ from telebot import types
 class SmartHandler:
     """Умный обработчик сообщений пользователей"""
     
-    def __init__(self, bot):
+    def __init__(self, bot, user_states=None):
         self.bot = bot
+        self.user_states = user_states or {}
         
         # Словарь ключевых слов - что ищем в сообщениях пользователей
         self.keywords = {
@@ -125,9 +126,7 @@ class SmartHandler:
         # ✅ НОВАЯ ЛОГИКА: проверяем режим админа
         user_id = message.from_user.id
         if user_id in ADMIN_IDS:
-            # Импортируем из main.py текущее состояние
-            import main
-            admin_mode = main.user_states.get(user_id)
+            admin_mode = self.user_states.get(user_id)
 
             if admin_mode != "user_simulation":
                 print(f"[SMART] Пропускаю админа {user_id} (админ-режим)")

@@ -26,7 +26,7 @@ print(f"[INFO] Текущий режим: {os.getenv('ENV', 'prod')}")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 CHANNEL_ID = -1002275474152  # ID канала для проверки связи
-smart_handler = SmartHandler(bot)
+smart_handler = SmartHandler(bot, user_states)
 
 notification_scheduler = ConsultationNotificationScheduler(bot)
 
