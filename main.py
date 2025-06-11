@@ -25,7 +25,7 @@ print(f"[INFO] Текущий режим: {os.getenv('ENV', 'prod')}")
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
-
+CHANNEL_ID = -1002275474152  # ID канала для проверки связи
 smart_handler = SmartHandler(bot)
 
 notification_scheduler = ConsultationNotificationScheduler(bot)
@@ -585,19 +585,19 @@ def view_today_slots(message):
         return
 
     from admin_consultation import AdminConsultationManager
-    manager = AdminConsultationManager(bot)
+    manager = AdminConsultationManager(bot, user_states)
     manager.show_today_slots(message)
 
 @bot.message_handler(commands=["admin_consultations"])
 def handle_admin_consultations(message):
     from admin_consultation import AdminConsultationManager
-    manager = AdminConsultationManager(bot)
+    manager = AdminConsultationManager(bot, user_states)
     manager.show_admin_menu(message)
 
 @bot.message_handler(commands=['admin'])
 def handle_admin_command(message):
     from admin_consultation import AdminConsultationManager
-    manager = AdminConsultationManager(bot)
+    manager = AdminConsultationManager(bot, user_states)
     manager.show_admin_menu(message)
 
 # @bot.callback_query_handler(func=lambda call: True)
@@ -650,12 +650,16 @@ def create_main_menu():
         "📋 Список кредиторов PDF (бесплатно) 🆓",
         callback_data="creditors_list"
     )
+    courses_btn = types.InlineKeyboardButton(
+        "🎥 Видео-курсы", 
+        callback_data="video_courses"
+    )
     info_btn = types.InlineKeyboardButton(
         "ℹ️ О боте", 
         callback_data="bot_info"
     )
     
-    markup.add(lawyer_btn, credit_btn, bankruptcy_btn, creditors_list_btn, consultation_btn, info_btn)
+    markup.add(lawyer_btn, credit_btn, bankruptcy_btn, creditors_list_btn, consultation_btn, info_btn, courses_btn)
     return markup
 
 def handle_lawyer_consultation(call):
@@ -1571,6 +1575,19 @@ def debug_user(message):
     except:
         bot.reply_to(message, "Формат: /debug_user user_id")
 
+@bot.message_handler(commands=['test_channel'])
+def test_channel(message):
+    ADMIN_IDS = [376068212, 827743984]
+    if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "⛔ Доступ запрещен.")
+        return
+
+    try:
+        bot.send_message(CHANNEL_ID, "📡 Тест связи с каналом: всё работает!")
+        bot.reply_to(message, "✅ Связь с каналом работает. Бот может отправлять сообщения.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка отправки: {e}")
+
 @bot.callback_query_handler(func=lambda call: call.data in ["confirm_broadcast", "cancel_broadcast"])
 def handle_broadcast_callback(call):
     """Обработка подтверждения/отмены рассылки"""
@@ -1666,7 +1683,7 @@ def handle_broadcast_callback(call):
     bot.answer_callback_query(call.id, f"Рассылка завершена! Отправлено: {sent_count}")
 
 # СЛОТЫ АДМИНИСТРАТОРА
-admin_manager = AdminConsultationManager(bot)
+admin_manager = AdminConsultationManager(bot,user_states)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_slots_today")
 def handle_admin_slots_today(call):
@@ -1683,13 +1700,13 @@ def handle_admin_slot_details(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_slots_week")
 def handle_admin_slots_week(call):
-    manager = AdminConsultationManager(bot)
+    manager = AdminConsultationManager(bot, user_states)
     manager.show_week_slots(call)
 # Также нужно обновить обработчик callback_query_handler, добавив новые условия:
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_all_slots")
 def handle_admin_all_slots(call):
-    manager = AdminConsultationManager(bot)
+    manager = AdminConsultationManager(bot, user_states)
     manager.show_all_slots(call)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_cancel_slot_"))
@@ -1701,7 +1718,16 @@ def handle_admin_cancel_slot(call):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback_query(call):
     user_id = call.from_user.id
-    
+    # ✅ ДОБАВИТЬ ЭТУ ПРОВЕРКУ В НАЧАЛО:
+    ADMIN_IDS = [376068212, 827743984]
+    if user_id in ADMIN_IDS and call.data.startswith("admin_"):
+        # print(f"[DEBUG] Админский callback: {call.data}")
+        # Передаем админские callback в AdminConsultationManager
+        from admin_consultation import AdminConsultationManager
+        manager = AdminConsultationManager(bot, user_states)
+        manager.handle_admin_callback(call)
+        bot.answer_callback_query(call.id)
+        return  # ← ВЫХОДИМ, НЕ ОЧИЩАЕМ СОСТОЯНИЕ!
     if call.data == "lawyer_consultation":
         handle_lawyer_consultation(call)
     elif call.data == "check_credit_report":
@@ -1724,7 +1750,7 @@ def handle_callback_query(call):
         handle_how_to_get_report(call)
     elif call.data.startswith("admin_"):
         from admin_consultation import AdminConsultationManager
-        manager = AdminConsultationManager(bot)
+        manager = AdminConsultationManager(bot, user_states)
 
         # Обработка ручной отправки напоминаний
         if call.data == "admin_send_reminders":
@@ -1995,7 +2021,14 @@ def handle_forwarded(message):
 def handle_all_messages(message):
     """Улучшенная обработка всех сообщений с умным анализом"""
     user_id = message.from_user.id
+    # print(f"[TRACE] handle_all_messages вызван для {user_id}")
+    # print(f"[TRACE] id(user_states): {id(user_states)}") 
     current_state = user_states.get(user_id)
+    # print(f"[DEBUG] Состояние: {current_state}")
+
+    # 🔧 ОТЛАДКА: проверяем состояние админа
+    # print(f"[DEBUG] Пользователь {user_id}: состояние = '{current_state}'")
+    # print(f"[DEBUG] Сообщение: '{message.text}'")
     
     if current_state == "lawyer_consultation":
         # Обработка вопроса к юристу (существующая логика)
@@ -2016,6 +2049,30 @@ def handle_all_messages(message):
             "Текстовые сообщения не обрабатываются в этом режиме.\n\n"
             "💡 Если хотите задать вопрос, используйте /start и выберите подходящую услугу."
         )
+    elif current_state and current_state.startswith("admin_messaging_"):
+        # 🆕 ДОБАВИТЬ ЭТОТ БЛОК
+        # Админ отправляет сообщение пользователю
+        target_user_id = int(current_state.replace("admin_messaging_", ""))
+        admin_message = message.text
+        
+        try:
+            # Отправляем сообщение пользователю
+            bot.send_message(
+                chat_id=target_user_id,
+                text=f"📩 **Сообщение от администратора:**\n\n{admin_message}",
+                parse_mode='Markdown'
+            )
+            
+            # Подтверждение админу
+            bot.reply_to(message, f"✅ Сообщение отправлено пользователю {target_user_id}")
+            
+        except Exception as e:
+            # Ошибка отправки
+            bot.reply_to(message, f"❌ Не удалось отправить сообщение: {str(e)}")
+        
+        # Сбрасываем состояние админа
+        user_states.pop(user_id, None)
+        return
     else:
         # 🆕 НОВАЯ УМНАЯ ОБРАБОТКА
         smart_handler.handle_message(message)

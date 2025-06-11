@@ -120,7 +120,11 @@ class SmartHandler:
 
     def handle_message(self, message):
         """Основная функция - обрабатываем сообщение пользователя"""
-        
+        # ✅ ДОБАВИТЬ ЭТУ ПРОВЕРКУ:
+        ADMIN_IDS = [376068212, 827743984]
+        if message.from_user.id in ADMIN_IDS:
+            print(f"[SMART] Пропускаю админа {message.from_user.id}")
+            return  # НЕ ОБРАБАТЫВАЕМ СООБЩЕНИЯ ОТ АДМИНОВ
         # 1. Анализируем сообщение
         category = self.analyze_message(message.text)
         
