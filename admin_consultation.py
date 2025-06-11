@@ -15,10 +15,12 @@ load_dotenv()
 
 DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() == "true"
 env = "dev" if DEBUG_MODE else "prod"
+ADMIN_IDS = [376068212, 827743984]  # Добавьте нужные ID администраторов
 
 class AdminConsultationManager:
-    def __init__(self, bot):
+    def __init__(self, bot, user_states_dict):
         self.bot = bot
+        self.user_states = user_states_dict
         self.ADMIN_IDS = [376068212, 827743984]  # Добавьте нужные ID
 
     def show_admin_menu(self, message):
@@ -479,6 +481,7 @@ class AdminConsultationManager:
             text="✅ Слот удален и участники уведомлены.\n💡 Теперь пользователи смогут записаться на это время заново.",
             reply_markup=None
         )
+    
     def manual_send_reminders(self, call):
         """Ручная отправка всех напоминаний (кнопка админа)"""
         if call.from_user.id not in self.ADMIN_IDS:
@@ -528,6 +531,41 @@ class AdminConsultationManager:
         except Exception as e:
             print(f"[ERROR] Ошибка ручной отправки: {e}")
             self.bot.answer_callback_query(call.id, "❌ Ошибка при отправке напоминаний")
+
+    #новый метод handle_admin_callback
+    #Этот метод должен проверять если call.data.startswith("admin_message_user_")
+    #Извлекать user_id из callback_data
+    #Устанавливать состояние админа для ввода сообщения
+    def handle_admin_callback(self, call):
+        if call.data.startswith("admin_message_user_"):
+            user_id = int(call.data.split("_")[-1])
+            admin_id = call.from_user.id
+
+            if admin_id not in self.ADMIN_IDS:
+                self.bot.answer_callback_query(call.id, "⛔️ У вас нет доступа.")
+                return
+            
+            self.user_states[admin_id] = f"admin_messaging_{user_id}"
+            # print(f"[DEBUG] Состояние установлено: {self.user_states.get(admin_id)}")
+            # print(f"[DEBUG] id(user_states): {id(self.user_states)}")
+            # ❌ УБРАТЬ ЭТУ СТРОКУ:
+            # from main import user_states
+            
+            # ✅ ДОБАВИТЬ ПРЯМОЙ ДОСТУП К ГЛОБАЛЬНОЙ ПЕРЕМЕННОЙ:
+            import main
+            main.user_states[admin_id] = f"admin_messaging_{user_id}"
+            
+            # 🔧 ОТЛАДКА
+            # print(f"[DEBUG] Установлено состояние админа {admin_id}: admin_messaging_{user_id}")
+            # print(f"[DEBUG] Проверка состояния сразу: {main.user_states.get(admin_id)}")
+            
+            self.bot.send_message(
+                chat_id=call.message.chat.id,
+                text=f"✍️ Введите сообщение для пользователя с ID `{user_id}`:",
+                reply_markup=types.ReplyKeyboardRemove(),
+                parse_mode='Markdown'
+            )      
+    
 
 
 class ConsultationNotificationScheduler:
