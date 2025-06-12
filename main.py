@@ -895,6 +895,27 @@ def handle_video_courses(call):
         parse_mode='Markdown'
     )
 
+def handle_course_selection(call):
+    """Показать модули выбранного курса"""
+    user_id = call.from_user.id
+    course_id = call.data.replace("course_", "")
+
+    if not video_course_manager.check_course_access(user_id):
+        bot.answer_callback_query(call.id, "⛔ Доступ к курсу закрыт")
+        return
+
+    markup = video_course_manager.create_modules_menu(course_id, user_id)
+    courses = video_course_manager.get_available_courses()
+    course_title = next((c["title"] for c in courses if c["course_id"] == course_id), "Курс")
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=f"📚 **{course_title}**\n\nВыберите модуль:",
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
 def handle_free_consultation_request(call):
     """Обработка запроса на бесплатную консультацию"""
     user_id = call.from_user.id
@@ -1758,6 +1779,10 @@ def handle_callback_query(call):
         handle_creditors_list_request(call)
     elif call.data == "video_courses":
         handle_video_courses(call)
+
+    elif call.data.startswith("course_"):
+        handle_course_selection(call)
+
     elif call.data == "free_consultation":
         handle_free_consultation_request(call)
     elif call.data.startswith("book_slot_"):

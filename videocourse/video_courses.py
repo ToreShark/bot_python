@@ -160,7 +160,8 @@ class VideoCourseManager:
         
     def create_courses_menu(self, user_id):
         """Создает главное меню курсов"""
-        markup = types.InlineKeyboardMarkup(row_width=1)
+        # Будем располагать название курса и кнопку "Продолжить" в одной строке
+        markup = types.InlineKeyboardMarkup(row_width=2)
         
         courses = self.get_available_courses()
         
@@ -172,16 +173,27 @@ class VideoCourseManager:
             progress = self.get_user_progress(user_id, course_id)
             progress_percent = progress.get("progress_percent", 0)
             
-            # Формируем текст кнопки с прогрессом
+            # Текст основной кнопки с прогрессом
             if progress_percent > 0:
                 button_text = f"📚 {title} ({progress_percent}%)"
             else:
                 button_text = f"📚 {title}"
-            
-            markup.add(types.InlineKeyboardButton(
-                button_text, 
+
+            # Кнопка для перехода к описанию курса
+            course_btn = types.InlineKeyboardButton(
+                button_text,
                 callback_data=f"course_{course_id}"
-            ))
+            )
+
+            # Если пользователь уже начал курс, добавляем кнопку "Продолжить"
+            if progress_percent > 0 and progress_percent < 100:
+                continue_btn = types.InlineKeyboardButton(
+                    "▶️ Продолжить",
+                    callback_data=f"course_{course_id}"
+                )
+                markup.row(course_btn, continue_btn)
+            else:
+                markup.add(course_btn)
         
         markup.add(types.InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu"))
         
