@@ -675,7 +675,7 @@ def handle_lawyer_consultation(call):
         
         markup.add(types.InlineKeyboardButton("💰 5 000 ₸ - 10 вопросов", callback_data="pay_5000"))
         markup.add(types.InlineKeyboardButton("💰 10 000 ₸ - 25 вопросов", callback_data="pay_10000"))
-        markup.add(types.InlineKeyboardButton("💰 15 000 ₸ - 50 вопросов", callback_data="pay_15000"))
+        markup.add(types.InlineKeyboardButton("💰 15 000 ₸ - 30 вопросов", callback_data="pay_15000"))
         markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
         
         payment_text = (
@@ -785,7 +785,7 @@ def handle_payment_callback(call):
     amount_map = {
         "pay_5000": ("5 000", "10 вопросов"),
         "pay_10000": ("10 000", "25 вопросов"),
-        "pay_15000": ("15 000", "50 вопросов")
+        "pay_15000": ("15 000", "30 вопросов")
     }
     
     amount, questions = amount_map.get(call.data, ("неизвестная сумма", "0 вопросов"))
