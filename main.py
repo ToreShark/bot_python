@@ -16,6 +16,7 @@ from pydub import AudioSegment
 import openai
 from creditor_handler import process_all_creditors_request
 from smart_handler import SmartHandler
+from videocourse.video_courses import VideoCourseManager
 
 # Парсер кредитных отчетов уже интегрирован в document_processor
 
@@ -27,6 +28,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 CHANNEL_ID = -1002275474152  # ID канала для проверки связи
 smart_handler = SmartHandler(bot)
+video_course_manager = VideoCourseManager(bot)
 
 notification_scheduler = ConsultationNotificationScheduler(bot)
 
@@ -871,6 +873,24 @@ def handle_creditors_list_request(call):
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
         text=instruction_text,
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+def handle_video_courses(call):
+    """Показать главное меню видеокурсов"""
+    user_id = call.from_user.id
+
+    if not video_course_manager.check_course_access(user_id):
+        bot.answer_callback_query(call.id, "⛔ Доступ к видеокурсам закрыт")
+        return
+
+    markup = video_course_manager.create_courses_menu(user_id)
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="🎥 **Видеокурсы**\n\nВыберите курс:",
         reply_markup=markup,
         parse_mode='Markdown'
     )
@@ -1736,6 +1756,8 @@ def handle_callback_query(call):
         handle_bankruptcy_calculator(call)
     elif call.data == "creditors_list":  # ⭐ НОВАЯ СТРОКА
         handle_creditors_list_request(call)
+    elif call.data == "video_courses":
+        handle_video_courses(call)
     elif call.data == "free_consultation":
         handle_free_consultation_request(call)
     elif call.data.startswith("book_slot_"):
