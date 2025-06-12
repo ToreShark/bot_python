@@ -1779,8 +1779,10 @@ def handle_callback_query(call):
         handle_creditors_list_request(call)
     elif call.data == "video_courses":
         handle_video_courses(call)
+
     elif call.data.startswith("course_"):
         handle_course_selection(call)
+
     elif call.data == "free_consultation":
         handle_free_consultation_request(call)
     elif call.data.startswith("book_slot_"):
