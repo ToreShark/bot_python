@@ -16,6 +16,7 @@ from pydub import AudioSegment
 import openai
 from creditor_handler import process_all_creditors_request
 from smart_handler import SmartHandler
+from videocourse.video_courses import VideoCourseManager
 
 # Парсер кредитных отчетов уже интегрирован в document_processor
 
@@ -27,6 +28,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 CHANNEL_ID = -1002275474152  # ID канала для проверки связи
 smart_handler = SmartHandler(bot)
+video_course_manager = VideoCourseManager(bot)
 
 notification_scheduler = ConsultationNotificationScheduler(bot)
 
@@ -673,7 +675,7 @@ def handle_lawyer_consultation(call):
         
         markup.add(types.InlineKeyboardButton("💰 5 000 ₸ - 10 вопросов", callback_data="pay_5000"))
         markup.add(types.InlineKeyboardButton("💰 10 000 ₸ - 25 вопросов", callback_data="pay_10000"))
-        markup.add(types.InlineKeyboardButton("💰 15 000 ₸ - 50 вопросов", callback_data="pay_15000"))
+        markup.add(types.InlineKeyboardButton("💰 15 000 ₸ - 30 вопросов", callback_data="pay_15000"))
         markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
         
         payment_text = (
@@ -783,7 +785,7 @@ def handle_payment_callback(call):
     amount_map = {
         "pay_5000": ("5 000", "10 вопросов"),
         "pay_10000": ("10 000", "25 вопросов"),
-        "pay_15000": ("15 000", "50 вопросов")
+        "pay_15000": ("15 000", "30 вопросов")
     }
     
     amount, questions = amount_map.get(call.data, ("неизвестная сумма", "0 вопросов"))
@@ -871,6 +873,45 @@ def handle_creditors_list_request(call):
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
         text=instruction_text,
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+def handle_video_courses(call):
+    """Показать главное меню видеокурсов"""
+    user_id = call.from_user.id
+
+    if not video_course_manager.check_course_access(user_id):
+        bot.answer_callback_query(call.id, "⛔ Доступ к видеокурсам закрыт")
+        return
+
+    markup = video_course_manager.create_courses_menu(user_id)
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="🎥 **Видеокурсы**\n\nВыберите курс:",
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+def handle_course_selection(call):
+    """Показать модули выбранного курса"""
+    user_id = call.from_user.id
+    course_id = call.data.replace("course_", "")
+
+    if not video_course_manager.check_course_access(user_id):
+        bot.answer_callback_query(call.id, "⛔ Доступ к курсу закрыт")
+        return
+
+    markup = video_course_manager.create_modules_menu(course_id, user_id)
+    courses = video_course_manager.get_available_courses()
+    course_title = next((c["title"] for c in courses if c["course_id"] == course_id), "Курс")
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=f"📚 **{course_title}**\n\nВыберите модуль:",
         reply_markup=markup,
         parse_mode='Markdown'
     )
@@ -1736,6 +1777,10 @@ def handle_callback_query(call):
         handle_bankruptcy_calculator(call)
     elif call.data == "creditors_list":  # ⭐ НОВАЯ СТРОКА
         handle_creditors_list_request(call)
+    elif call.data == "video_courses":
+        handle_video_courses(call)
+    elif call.data.startswith("course_"):
+        handle_course_selection(call)
     elif call.data == "free_consultation":
         handle_free_consultation_request(call)
     elif call.data.startswith("book_slot_"):
