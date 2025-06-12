@@ -36,9 +36,9 @@ class VideoCourseManager:
             has_access = user.get("access", False)
             message_limit = user.get("message_limit", 0)
             
-            # Доступ к курсам только у пользователей с лимитом >= 50 сообщений
+            # Доступ к курсам только у пользователей с лимитом >= 30 сообщений
             # (это означает тариф 15000₸)
-            return has_access and message_limit >= 50
+            return has_access and message_limit >= 30
             
         except Exception as e:
             print(f"[ERROR] Ошибка проверки доступа: {e}")
