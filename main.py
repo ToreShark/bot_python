@@ -1,5 +1,6 @@
-import telebot
 import os
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+import telebot
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from admin_consultation import DEBUG_MODE, AdminConsultationManager, ConsultationNotificationScheduler
@@ -16,6 +17,7 @@ from pydub import AudioSegment
 import openai
 from creditor_handler import process_all_creditors_request
 from smart_handler import SmartHandler
+from videocourse.video_courses import VideoCourseManager
 
 # Парсер кредитных отчетов уже интегрирован в document_processor
 
@@ -27,6 +29,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 CHANNEL_ID = -1002275474152  # ID канала для проверки связи
 smart_handler = SmartHandler(bot)
+video_course_manager = VideoCourseManager(bot)
 
 notification_scheduler = ConsultationNotificationScheduler(bot)
 
@@ -81,7 +84,7 @@ def get_available_consultation_slots():
                     "time_slot": time_display,
                     "slot_id": slot_id,
                     "status": "open",
-                    "max_capacity": 1,
+                    "max_capacity": 2,
                     "created_at": datetime.utcnow(),
                     "admin_notes": ""
                 })
@@ -203,6 +206,22 @@ def handle_slot_booking(call):
         "slot_id": slot_id,
         "status": {"$nin": ["cancelled", "completed"]}
     })
+
+    # ✅ ПРОВЕРКА ЛИМИТА: максимум 2 человека на слот
+    if queue_size >= 2:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Назад к слотам", callback_data="free_consultation"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="❌ **Слот заполнен**\n\n"
+                 "На это время уже записались 2 человека.\n"
+                 "Выберите другое время.",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        return
     new_position = queue_size + 1
 
     consultation_queue_collection.insert_one({
@@ -742,7 +761,7 @@ def create_main_menu():
         callback_data="creditors_list"
     )
     courses_btn = types.InlineKeyboardButton(
-        "🎥 Видео-курсы", 
+        "🎥 Видеокурсы (платно) 💰", 
         callback_data="video_courses"
     )
     info_btn = types.InlineKeyboardButton(
@@ -764,7 +783,7 @@ def handle_lawyer_consultation(call):
         
         markup.add(types.InlineKeyboardButton("💰 5 000 ₸ - 10 вопросов", callback_data="pay_5000"))
         markup.add(types.InlineKeyboardButton("💰 10 000 ₸ - 25 вопросов", callback_data="pay_10000"))
-        markup.add(types.InlineKeyboardButton("💰 15 000 ₸ - 50 вопросов", callback_data="pay_15000"))
+        markup.add(types.InlineKeyboardButton("💰 15 000 ₸ - 30 вопросов", callback_data="pay_15000"))
         markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
         
         payment_text = (
@@ -874,7 +893,8 @@ def handle_payment_callback(call):
     amount_map = {
         "pay_5000": ("5 000", "10 вопросов"),
         "pay_10000": ("10 000", "25 вопросов"),
-        "pay_15000": ("15 000", "50 вопросов")
+        "pay_15000": ("15 000", "30 вопросов"),
+        "pay_video_course": ("15 000", "видеокурсы + 30 сообщений")
     }
     
     amount, questions = amount_map.get(call.data, ("неизвестная сумма", "0 вопросов"))
@@ -884,7 +904,10 @@ def handle_payment_callback(call):
         return
     
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 Назад к тарифам", callback_data="lawyer_consultation"))
+    if call.data == "pay_video_course":
+        markup.add(types.InlineKeyboardButton("🔙 Назад к видеокурсам", callback_data="video_courses"))
+    else:
+        markup.add(types.InlineKeyboardButton("🔙 Назад к тарифам", callback_data="lawyer_consultation"))
     
     payment_text = (
         f"💳 **Оплата {amount} ₸**\n"
@@ -966,10 +989,64 @@ def handle_creditors_list_request(call):
         parse_mode='Markdown'
     )
 
+def handle_video_courses(call):
+    """Показать видеокурсы или информацию о покупке"""
+    user_id = call.from_user.id
+    
+    # Проверяем, есть ли у пользователя доступ к видеокурсам
+    if video_course_manager.check_course_access(user_id):
+        # Пользователь уже купил доступ - показываем курсы
+        markup = video_course_manager.create_courses_menu(user_id)
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="🎥 **Видеокурсы**\n\nВыберите курс:",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+    else:
+        # Пользователь не купил - показываем информацию о покупке
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("💳 Оплатить 15 000 ₸", callback_data="pay_video_course"))
+        markup.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="🎥 **Видеокурсы по банкротству**\n\n"
+                 "💰 Годовой доступ к видеокурсам составляет **15 000 тенге**\n\n"
+                 "✅ **Что включено:**\n"
+                 "• Полный доступ к видеокурсам\n"
+                 "• 30 сообщений с ботом по банкротству\n"
+                 "• Техническая поддержка",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+
 def handle_free_consultation_request(call):
     """Обработка запроса на бесплатную консультацию"""
+
+def handle_course_selection(call):
+    """Показать модули выбранного курса"""
     user_id = call.from_user.id
-    user_states[user_id] = "selecting_consultation_slot"
+    course_id = call.data.replace("course_", "")
+
+    if not video_course_manager.check_course_access(user_id):
+        bot.answer_callback_query(call.id, "⛔ Доступ к курсу закрыт")
+        return
+
+    markup = video_course_manager.create_modules_menu(course_id, user_id)
+    courses = video_course_manager.get_available_courses()
+    course_title = next((c["title"] for c in courses if c["course_id"] == course_id), "Курс")
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=f"📚 **{course_title}**\n\nВыберите модуль:",
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+    user_id = call.from_user.id
     
     # Получаем доступные слоты на ближайшие понедельники
     available_slots = get_available_consultation_slots()
@@ -1626,18 +1703,79 @@ def grant_access(message):
         limit = int(parts[2])
         
         # Обновляем в базе данных
+        # Также сохраняем initial_message_limit для проверки доступа к видеокурсам
+        update_data = {
+            "access": True, 
+            "message_limit": limit,
+            "initial_message_limit": limit  # Сохраняем изначальный лимит
+        }
+        
+        # Если лимит >= 30, сразу даем доступ к видеокурсам
+        if limit >= 30:
+            update_data["video_course_access"] = True
+            
         users_collection.update_one(
             {"user_id": user_id},
-            {"$set": {"access": True, "message_limit": limit}}
+            {"$set": update_data}
         )
         
-        bot.reply_to(message, f"✅ Пользователю {user_id} дано {limit} сообщений")
+        # Отправляем уведомление пользователю
+        try:
+            bot.send_message(
+                user_id, 
+                f"✅ Вам предоставлен доступ к боту на {limit} сообщений"
+            )
+            bot.reply_to(message, f"✅ Пользователю {user_id} дано {limit} сообщений (уведомление отправлено)")
+        except Exception as e:
+            bot.reply_to(message, f"✅ Пользователю {user_id} дано {limit} сообщений (не удалось отправить уведомление: {e})")
         
     except:
         bot.reply_to(message, "❌ Формат: /grant_access user_id количество")
 
 @bot.message_handler(commands=['debug_user'])
-def debug_user(message):
+
+@bot.message_handler(commands=['revoke_access'])
+def revoke_access(message):
+    """Отзывает доступ у пользователя"""
+    ADMIN_USER_IDS = [376068212, 827743984]
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+
+    try:
+        # Разбираем команду: /revoke_access 1175419316
+        parts = message.text.split()
+        user_id = int(parts[1])
+        
+        # Обнуляем доступ в базе данных
+        update_data = {
+            "access": False,
+            "message_limit": 0,
+            "video_course_access": False,
+            "initial_message_limit": 0
+        }
+            
+        users_collection.update_one(
+            {"user_id": user_id},
+            {"$set": update_data}
+        )
+        
+        # Отправляем уведомление пользователю
+        try:
+            bot.send_message(
+                user_id, 
+                "❌ Ваш доступ к боту был отозван администратором.\n\n"
+                "📞 По вопросам обращайтесь: +77027568921"
+            )
+            bot.reply_to(message, f"❌ У пользователя {user_id} отозван доступ (уведомление отправлено)")
+        except Exception as e:
+            bot.reply_to(message, f"❌ У пользователя {user_id} отозван доступ (не удалось отправить уведомление: {e})")
+        
+    except IndexError:
+        bot.reply_to(message, "❌ Формат: /revoke_access user_id")
+    except ValueError:
+        bot.reply_to(message, "❌ Неверный формат user_id")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка: {e}")
     """Проверяем что в базе данных у пользователя"""
     ADMIN_USER_IDS = [376068212, 827743984]
     if message.from_user.id not in ADMIN_USER_IDS:
@@ -1808,6 +1946,13 @@ def handle_admin_cancel_slot(call):
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback_query(call):
+    # Сразу отвечаем Telegram, что запрос получен
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        # Игнорируем ошибки устаревших callback-запросов
+        print(f"[WARN] Callback query timeout: {e}")
+        pass
     user_id = call.from_user.id
     # ✅ ДОБАВИТЬ ЭТУ ПРОВЕРКУ В НАЧАЛО:
     ADMIN_IDS = [376068212, 827743984]
@@ -1817,7 +1962,6 @@ def handle_callback_query(call):
         from admin_consultation import AdminConsultationManager
         manager = AdminConsultationManager(bot, user_states)
         manager.handle_admin_callback(call)
-        bot.answer_callback_query(call.id)
         return  # ← ВЫХОДИМ, НЕ ОЧИЩАЕМ СОСТОЯНИЕ!
     if call.data == "lawyer_consultation":
         handle_lawyer_consultation(call)
@@ -1827,6 +1971,12 @@ def handle_callback_query(call):
         handle_bankruptcy_calculator(call)
     elif call.data == "creditors_list":  # ⭐ НОВАЯ СТРОКА
         handle_creditors_list_request(call)
+    elif call.data == "video_courses":
+        handle_video_courses(call)
+
+    elif call.data.startswith("course_"):
+        handle_course_selection(call)
+
     elif call.data == "free_consultation":
         handle_free_consultation_request(call)
     elif call.data.startswith("book_slot_"):
@@ -1885,7 +2035,6 @@ def handle_callback_query(call):
     elif call.data in ["confirm_broadcast", "cancel_broadcast"]:
         handle_broadcast_callback(call)
     
-    bot.answer_callback_query(call.id)
 
 # Пример текста для первой рассылки о новых функциях:
 ANNOUNCEMENT_TEXT = """🎉 **НОВЫЕ ФУНКЦИИ В БОТЕ!**
