@@ -32,18 +32,37 @@ class VideoCourseManager:
             if not user:
                 return False
             
-            # Проверяем, есть ли у него активный доступ И лимит сообщений
+            # Проверяем, есть ли у него активный доступ
             has_access = user.get("access", False)
-            message_limit = user.get("message_limit", 0)
             
-            # Доступ к курсам только у пользователей с лимитом >= 30 сообщений
-            # (это означает тариф 15000₸)
-            return has_access and message_limit >= 30
+            # Проверяем наличие специального флага для видеокурсов
+            has_video_access = user.get("video_course_access", False)
+            
+            # Если флаг не установлен, проверяем по изначальному тарифу
+            if not has_video_access:
+                # Пытаемся определить изначальный тариф
+                # Если initial_message_limit не сохранен, используем текущий message_limit
+                initial_limit = user.get("initial_message_limit", user.get("message_limit", 0))
+                
+                # Также проверяем по полю tariff_type если оно есть
+                tariff_type = user.get("tariff_type", "")
+                
+                # Доступ к видеокурсам есть если:
+                # 1. Изначальный лимит >= 30 (тариф 15000₸)
+                # 2. Или явно указан тариф premium/video
+                if initial_limit >= 30 or tariff_type in ["premium", "video", "15000"]:
+                    # Устанавливаем флаг для будущих проверок
+                    users_collection.update_one(
+                        {"user_id": user_id},
+                        {"$set": {"video_course_access": True}}
+                    )
+                    has_video_access = True
+            
+            return has_access and has_video_access
             
         except Exception as e:
             print(f"[ERROR] Ошибка проверки доступа: {e}")
             return False
-        
     def get_available_courses(self):
         """Получает список всех активных курсов"""
         try:
