@@ -530,8 +530,8 @@ def generate_creditors_list_pdf(parsed_data):
         # Сборка PDF
         doc.build(elements)
         
-        print(f"✅ PDF создан: {tmp_file.name}")
-        print(f"   Статус готовности: {'ГОТОВ К БАНКРОТСТВУ' if is_bankruptcy_ready else 'ТРЕБУЕТ ДОРАБОТКИ'}")
+        # print(f"✅ PDF создан: {tmp_file.name}")
+        # print(f"   Статус готовности: {'ГОТОВ К БАНКРОТСТВУ' if is_bankruptcy_ready else 'ТРЕБУЕТ ДОРАБОТКИ'}")
         
         return tmp_file.name
 
