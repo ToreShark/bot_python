@@ -532,6 +532,138 @@ class AdminConsultationManager:
             print(f"[ERROR] Ошибка ручной отправки: {e}")
             self.bot.answer_callback_query(call.id, "❌ Ошибка при отправке напоминаний")
 
+    def find_empty_slot(self):
+        """Находит первый доступный пустой слот для автоматической записи"""
+        from datetime import datetime, timedelta
+        import pytz
+        
+        # Получить текущее время с учетом часового пояса (Алматы)
+        almaty_tz = pytz.timezone('Asia/Almaty')
+        now = datetime.now(almaty_tz)
+        today_str = now.strftime("%Y-%m-%d")
+        
+        # Запрос к БД для поиска открытых слотов
+        slots = consultation_slots_collection.find({
+            "status": "open",
+            "date": {"$gte": today_str}
+        }).sort([("date", 1), ("time_slot", 1)])
+        
+        for slot in slots:
+            try:
+                slot_date = slot["date"]
+                time_slot = slot["time_slot"]
+                slot_id = f"{slot_date}_{time_slot.split('-')[0]}"
+                
+                # Проверить, что время еще не прошло
+                slot_datetime_str = f"{slot_date} {time_slot.split('-')[0]}"
+                slot_datetime = datetime.strptime(slot_datetime_str, "%Y-%m-%d %H:%M")
+                slot_datetime = almaty_tz.localize(slot_datetime)
+                
+                if slot_datetime <= now:
+                    continue  # Слот уже прошел
+                
+                # Подсчитать количество активных записей
+                active_bookings = consultation_queue_collection.count_documents({
+                    "slot_id": slot_id,
+                    "status": {"$nin": ["cancelled", "completed"]}
+                })
+                
+                # Если записей 0 - вернуть информацию о слоте
+                if active_bookings == 0:
+                    slot_date_obj = datetime.strptime(slot_date, "%Y-%m-%d")
+                    formatted_date = slot_date_obj.strftime("%d.%m.%Y")
+                    
+                    return {
+                        "slot_id": slot_id,
+                        "date": slot_date,
+                        "time_slot": time_slot,
+                        "formatted_date": formatted_date
+                    }
+                    
+            except Exception as e:
+                print(f"[ERROR] Ошибка при обработке слота {slot}: {e}")
+                continue
+        
+        # Если пустых слотов нет - вернуть None
+        return None
+
+    def handle_rebooking_cancel(self, call, booking_id):
+        """Обрабатывает отмену записи при перезаписи"""
+        from bson import ObjectId
+        from datetime import datetime
+        
+        try:
+            # Находим запись пользователя
+            booking = consultation_queue_collection.find_one({"_id": ObjectId(booking_id)})
+            if not booking:
+                self.bot.answer_callback_query(call.id, "❌ Запись не найдена")
+                return
+            
+            user_id = booking["user_id"]
+            slot_id = booking["slot_id"]
+            position = booking["position"]
+            
+            # Отменяем запись
+            consultation_queue_collection.update_one(
+                {"_id": ObjectId(booking_id)},
+                {"$set": {
+                    "status": "cancelled",
+                    "cancelled_at": datetime.utcnow(),
+                    "cancelled_reason": "user_rebooking_cancel"
+                }}
+            )
+            
+            # Обновляем позиции других участников в очереди (сдвигаем на -1)
+            consultation_queue_collection.update_many(
+                {
+                    "slot_id": slot_id,
+                    "position": {"$gt": position},
+                    "status": {"$nin": ["cancelled", "completed"]}
+                },
+                {"$inc": {"position": -1}}
+            )
+            
+            # Убираем состояние ожидания
+            if user_id in self.user_states:
+                del self.user_states[user_id]
+            
+            # Получаем информацию о слоте для отображения
+            date_str, time_str = slot_id.split("_")
+            slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+            formatted_date = slot_date.strftime("%d.%m.%Y")
+            end_hour = int(time_str.split(":")[0]) + 1
+            time_display = f"{time_str}-{end_hour:02d}:00"
+            
+            # Отправляем подтверждение об отмене
+            confirmation_text = (
+                f"✅ **Запись отменена**\n\n"
+                f"📅 Отмененная консультация:\n"
+                f"🗓 Дата: {formatted_date}\n"
+                f"🕐 Время: {time_display}\n\n"
+                f"💡 **Что дальше?**\n"
+                f"Вы можете записаться на другое время когда будет удобно"
+            )
+            
+            # Создаем кнопки
+            from telebot import types
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(
+                types.InlineKeyboardButton("📅 Записаться заново", callback_data="free_consultation"),
+                types.InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu")
+            )
+            
+            self.bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=confirmation_text,
+                reply_markup=markup,
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            print(f"[ERROR] Ошибка в handle_rebooking_cancel: {e}")
+            self.bot.answer_callback_query(call.id, "❌ Произошла ошибка при отмене")
+
     #новый метод handle_admin_callback
     #Этот метод должен проверять если call.data.startswith("admin_message_user_")
     #Извлекать user_id из callback_data

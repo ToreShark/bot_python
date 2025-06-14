@@ -461,6 +461,10 @@ def confirm_consultation_participation(call, booking_id, stage):
         {"$set": update}
     )
 
+    # Если подтверждение за день и пользователь первый в очереди - уведомляем остальных
+    if stage == "day" and booking["position"] == 1:
+        send_rebooking_notifications(booking["slot_id"])
+
     bot.answer_callback_query(call.id, "✅ Участие подтверждено!")
     bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
 
@@ -494,6 +498,522 @@ def cancel_consultation_booking(call, booking_id, reason):
 
     bot.answer_callback_query(call.id, "✅ Запись отменена")
     bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+
+def send_rebooking_notifications(slot_id):
+    """Отправляет уведомления остальным участникам очереди о необходимости перезаписи"""
+    from datetime import datetime
+    from bson import ObjectId
+    
+    # Найти всех участников очереди кроме первого
+    queue_members = consultation_queue_collection.find({
+        "slot_id": slot_id,
+        "position": {"$gte": 2},
+        "status": {"$nin": ["cancelled", "completed"]}
+    }).sort("position", 1)
+    
+    # Получить информацию о слоте для форматирования
+    date_str, time_str = slot_id.split("_")
+    slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+    formatted_date = slot_date.strftime("%d.%m.%Y")
+    end_hour = int(time_str.split(":")[0]) + 1
+    time_display = f"{time_str}-{end_hour:02d}:00"
+    
+    for member in queue_members:
+        try:
+            user_id = member["user_id"]
+            position = member["position"]
+            booking_id = str(member["_id"])
+            
+            text = (
+                f"❌ **К сожалению, вы не попадаете на консультацию**\n\n"
+                f"📅 Дата: {formatted_date} в {time_display}\n"
+                f"📍 Ваша позиция в очереди: {position}\n\n"
+                f"ℹ️ **Почему так произошло:**\n"
+                f"На каждую консультацию принимается только 1 человек. Первый участник уже подтвердил своё участие.\n\n"
+                f"🎯 **Что делать дальше:**\n"
+                f"Выберите удобный для вас вариант:\n\n"
+                f"✅ **Рекомендуем записаться на другое время!**"
+            )
+            
+            # Создаем кнопки выбора
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(
+                types.InlineKeyboardButton("🔄 Выбрать другое время вручную", callback_data=f"manual_rebooking_{booking_id}"),
+                types.InlineKeyboardButton("⚡ Записать автоматически", callback_data=f"auto_rebooking_{booking_id}"),
+                types.InlineKeyboardButton("❌ Отменить запись", callback_data=f"cancel_rebooking_{booking_id}")
+            )
+            
+            # Устанавливаем состояние пользователя
+            user_states[user_id] = "awaiting_rebooking_choice"
+            
+            bot.send_message(
+                chat_id=user_id,
+                text=text,
+                reply_markup=markup,
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            print(f"[ERROR] Ошибка отправки уведомления пользователю {user_id}: {e}")
+
+def handle_manual_rebooking(call):
+    """Обрабатывает выбор ручной перезаписи на другое время"""
+    from bson import ObjectId
+    
+    # Извлекаем booking_id из callback_data
+    booking_id = call.data.replace("manual_rebooking_", "")
+    
+    try:
+        # Получаем информацию о текущей записи
+        booking = consultation_queue_collection.find_one({"_id": ObjectId(booking_id)})
+        if not booking:
+            bot.answer_callback_query(call.id, "❌ Запись не найдена")
+            return
+        
+        current_slot_id = booking["slot_id"]
+        
+        # Получаем список доступных слотов
+        available_slots = get_available_consultation_slots()
+        
+        if not available_slots:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="❌ К сожалению, свободных слотов для записи нет.\n\nПопробуйте позже или выберите автоматическую запись.",
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔙 Назад", callback_data=f"manual_rebooking_{booking_id}")
+                )
+            )
+            return
+        
+        # Создаем markup со слотами (исключаем текущий слот)
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        
+        for slot in available_slots:
+            slot_id = slot["slot_id"]
+            
+            # Исключаем текущий слот пользователя
+            if slot_id == current_slot_id:
+                continue
+                
+            # Подсчитываем количество людей в очереди
+            queue_count = consultation_queue_collection.count_documents({
+                "slot_id": slot_id,
+                "status": {"$nin": ["cancelled", "completed"]}
+            })
+            
+            # Формируем текст кнопки с информацией об очереди
+            button_text = f"{slot['formatted_date']} {slot['time_display']}"
+            if queue_count > 0:
+                button_text += f" ({queue_count} в очереди)"
+            else:
+                button_text += " (свободно)"
+            
+            markup.add(types.InlineKeyboardButton(
+                button_text,
+                callback_data=f"rebooking_{slot_id}_{booking_id}"
+            ))
+        
+        # Добавляем кнопку отмены
+        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data=f"cancel_rebooking_{booking_id}"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="🗓 **Выберите новое время для консультации:**\n\nДоступные слоты:",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        print(f"[ERROR] Ошибка в handle_manual_rebooking: {e}")
+        bot.answer_callback_query(call.id, "❌ Произошла ошибка")
+
+def handle_auto_rebooking(call):
+    """Обрабатывает автоматическую перезапись на первый доступный пустой слот"""
+    from bson import ObjectId
+    from datetime import datetime
+    
+    # Извлекаем booking_id из callback_data
+    booking_id = call.data.replace("auto_rebooking_", "")
+    
+    try:
+        # Получаем информацию о текущей записи
+        booking = consultation_queue_collection.find_one({"_id": ObjectId(booking_id)})
+        if not booking:
+            bot.answer_callback_query(call.id, "❌ Запись не найдена")
+            return
+        
+        user_id = booking["user_id"]
+        
+        # Используем AdminConsultationManager для поиска пустого слота
+        from admin_consultation import AdminConsultationManager
+        admin_manager = AdminConsultationManager(bot, user_states)
+        empty_slot = admin_manager.find_empty_slot()
+        
+        if not empty_slot:
+            # Если пустых слотов нет - предлагаем выбрать вручную
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(
+                types.InlineKeyboardButton("🔄 Выбрать другое время вручную", callback_data=f"manual_rebooking_{booking_id}"),
+                types.InlineKeyboardButton("❌ Отменить запись", callback_data=f"cancel_rebooking_{booking_id}")
+            )
+            
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="❌ **К сожалению, полностью свободных слотов нет**\n\n"
+                     "🎯 **Что можно сделать:**\n"
+                     "• Выбрать время вручную (вы встанете в очередь)\n"
+                     "• Отменить запись и попробовать позже",
+                reply_markup=markup,
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Найден пустой слот - автоматически записываем
+        new_slot_id = empty_slot["slot_id"]
+        
+        # Создаем новую запись в пустом слоте (позиция = 1)
+        new_booking = {
+            "user_id": user_id,
+            "slot_id": new_slot_id,
+            "position": 1,
+            "status": "waiting",
+            "notifications_sent": {
+                "day_before": False,
+                "hour_before": False
+            },
+            "registered_at": datetime.utcnow()
+        }
+        
+        # Вставляем новую запись
+        result = consultation_queue_collection.insert_one(new_booking)
+        new_booking_id = result.inserted_id
+        
+        # Отменяем старую запись
+        consultation_queue_collection.update_one(
+            {"_id": ObjectId(booking_id)},
+            {"$set": {
+                "status": "cancelled",
+                "cancelled_at": datetime.utcnow(),
+                "cancelled_reason": "auto_rebooking"
+            }}
+        )
+        
+        # Убираем состояние ожидания
+        if user_id in user_states:
+            del user_states[user_id]
+        
+        # Отправляем подтверждение
+        confirmation_text = (
+            f"✅ **Автоматическая перезапись выполнена!**\n\n"
+            f"📅 **Новое время консультации:**\n"
+            f"🗓 Дата: {empty_slot['formatted_date']}\n"
+            f"🕐 Время: {empty_slot['time_slot']}\n"
+            f"📍 Ваша позиция: **1 место** (первый в очереди)\n\n"
+            f"🔔 Вы получите напоминания:\n"
+            f"• За 24 часа до консультации\n"
+            f"• За 1 час до консультации\n\n"
+            f"✨ Рекомендуем добавить дату в календарь!"
+        )
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=confirmation_text,
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        print(f"[ERROR] Ошибка в handle_auto_rebooking: {e}")
+        bot.answer_callback_query(call.id, "❌ Произошла ошибка при автоматической записи")
+
+def handle_cancel_rebooking(call):
+    """Обрабатывает отмену записи при выборе варианта перезаписи"""
+    # Извлекаем booking_id из callback_data
+    booking_id = call.data.replace("cancel_rebooking_", "")
+    
+    # Используем метод из AdminConsultationManager
+    from admin_consultation import AdminConsultationManager
+    admin_manager = AdminConsultationManager(bot, user_states)
+    admin_manager.handle_rebooking_cancel(call, booking_id)
+
+def handle_rebooking_slot_selection(call):
+    """Обрабатывает выбор конкретного слота для перезаписи"""
+    from bson import ObjectId
+    from datetime import datetime
+    
+    # Извлекаем new_slot_id и old_booking_id из callback_data
+    # Формат: "rebooking_{new_slot_id}_{old_booking_id}"
+    parts = call.data.replace("rebooking_", "").split("_")
+    if len(parts) < 3:  # slot_id содержит дату и время через _
+        bot.answer_callback_query(call.id, "❌ Неверный формат данных")
+        return
+    
+    # Восстанавливаем slot_id (дата_время) и booking_id
+    new_slot_id = "_".join(parts[:-1])  # все части кроме последней
+    old_booking_id = parts[-1]         # последняя часть
+    
+    try:
+        # Получаем информацию о старой записи
+        old_booking = consultation_queue_collection.find_one({"_id": ObjectId(old_booking_id)})
+        if not old_booking:
+            bot.answer_callback_query(call.id, "❌ Старая запись не найдена")
+            return
+        
+        user_id = old_booking["user_id"]
+        old_slot_id = old_booking["slot_id"]
+        old_position = old_booking["position"]
+        
+        # Проверяем, что новый слот все еще доступен и есть места
+        current_queue_count = consultation_queue_collection.count_documents({
+            "slot_id": new_slot_id,
+            "status": {"$nin": ["cancelled", "completed"]}
+        })
+        
+        if current_queue_count >= 2:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="❌ **К сожалению, выбранный слот уже заполнен**\n\n"
+                     "Попробуйте выбрать другое время или воспользуйтесь автоматической записью.",
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔄 Выбрать другое время", callback_data=f"manual_rebooking_{old_booking_id}"),
+                    types.InlineKeyboardButton("⚡ Автоматическая запись", callback_data=f"auto_rebooking_{old_booking_id}")
+                ),
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Определяем новую позицию в очереди
+        new_position = current_queue_count + 1
+        
+        # Создаем новую запись в выбранном слоте
+        new_booking = {
+            "user_id": user_id,
+            "slot_id": new_slot_id,
+            "position": new_position,
+            "status": "waiting",
+            "notifications_sent": {
+                "day_before": False,
+                "hour_before": False
+            },
+            "registered_at": datetime.utcnow()
+        }
+        
+        # Вставляем новую запись
+        result = consultation_queue_collection.insert_one(new_booking)
+        new_booking_id = result.inserted_id
+        
+        # Отменяем старую запись
+        consultation_queue_collection.update_one(
+            {"_id": ObjectId(old_booking_id)},
+            {"$set": {
+                "status": "cancelled",
+                "cancelled_at": datetime.utcnow(),
+                "cancelled_reason": "manual_rebooking"
+            }}
+        )
+        
+        # Обновляем позиции в старой очереди (сдвигаем участников выше отмененной позиции)
+        consultation_queue_collection.update_many(
+            {
+                "slot_id": old_slot_id,
+                "position": {"$gt": old_position},
+                "status": {"$nin": ["cancelled", "completed"]}
+            },
+            {"$inc": {"position": -1}}
+        )
+        
+        # Убираем состояние ожидания
+        if user_id in user_states:
+            del user_states[user_id]
+        
+        # Получаем информацию о новом слоте для отображения
+        date_str, time_str = new_slot_id.split("_")
+        slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = slot_date.strftime("%d.%m.%Y")
+        end_hour = int(time_str.split(":")[0]) + 1
+        time_display = f"{time_str}-{end_hour:02d}:00"
+        
+        # Формируем текст подтверждения
+        position_text = "1 место (первый в очереди)" if new_position == 1 else f"{new_position} место"
+        
+        confirmation_text = (
+            f"✅ **Перезапись выполнена успешно!**\n\n"
+            f"📅 **Новое время консультации:**\n"
+            f"🗓 Дата: {formatted_date}\n"
+            f"🕐 Время: {time_display}\n"
+            f"📍 Ваша позиция: **{position_text}**\n\n"
+            f"🔔 **Напоминания:**\n"
+            f"• За 24 часа до консультации\n"
+            f"• За 1 час до консультации\n\n"
+            f"✨ Рекомендуем добавить дату в календарь!"
+        )
+        
+        # Добавляем дополнительную информацию для тех, кто не первый
+        if new_position > 1:
+            confirmation_text += (
+                f"\n\n💡 **Обратите внимание:**\n"
+                f"Если участники впереди вас откажутся от консультации, "
+                f"вы автоматически продвинетесь в очереди и получите уведомление."
+            )
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=confirmation_text,
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        print(f"[ERROR] Ошибка в handle_rebooking_slot_selection: {e}")
+        bot.answer_callback_query(call.id, "❌ Произошла ошибка при перезаписи")
+
+def handle_rebooking_confirmation(call):
+    """Обработка перезаписи на выбранный слот"""
+    from bson import ObjectId
+    from datetime import datetime
+    
+    try:
+        # Извлекаем данные из callback_data
+        parts = call.data.split("_")
+        if len(parts) < 4:
+            bot.answer_callback_query(call.id, "❌ Неверный формат данных")
+            return
+            
+        new_slot_id = f"{parts[1]}_{parts[2]}"  # date_time
+        old_booking_id = parts[3]
+        
+        # Получаем информацию о старой записи
+        old_booking = consultation_queue_collection.find_one({"_id": ObjectId(old_booking_id)})
+        if not old_booking:
+            bot.answer_callback_query(call.id, "❌ Старая запись не найдена")
+            return
+        
+        user_id = old_booking["user_id"]
+        old_slot_id = old_booking["slot_id"]
+        old_position = old_booking["position"]
+        
+        # Проверяем количество записей в новом слоте
+        current_queue_count = consultation_queue_collection.count_documents({
+            "slot_id": new_slot_id,
+            "status": {"$nin": ["cancelled", "completed"]}
+        })
+        
+        if current_queue_count >= 2:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="❌ **К сожалению, выбранный слот уже заполнен**\n\n"
+                     "Попробуйте выбрать другое время или воспользуйтесь автоматической записью.",
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔄 Выбрать другое время", callback_data=f"manual_rebooking_{old_booking_id}"),
+                    types.InlineKeyboardButton("⚡ Автоматическая запись", callback_data=f"auto_rebooking_{old_booking_id}")
+                ),
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Определяем новую позицию в очереди
+        new_position = current_queue_count + 1
+        
+        # Создаем новую запись с данными пользователя
+        new_booking = {
+            "user_id": user_id,
+            "slot_id": new_slot_id,
+            "position": new_position,
+            "status": "waiting",
+            "notifications_sent": {
+                "day_before": False,
+                "hour_before": False
+            },
+            "registered_at": datetime.utcnow()
+        }
+        
+        # Вставляем новую запись
+        consultation_queue_collection.insert_one(new_booking)
+        
+        # Отменяем старую запись
+        consultation_queue_collection.update_one(
+            {"_id": ObjectId(old_booking_id)},
+            {"$set": {
+                "status": "cancelled",
+                "cancelled_at": datetime.utcnow(),
+                "cancelled_reason": "rebooked"
+            }}
+        )
+        
+        # Обновляем позиции в старой очереди (сдвигаем на -1)
+        consultation_queue_collection.update_many(
+            {
+                "slot_id": old_slot_id,
+                "position": {"$gt": old_position},
+                "status": {"$nin": ["cancelled", "completed"]}
+            },
+            {"$inc": {"position": -1}}
+        )
+        
+        # Очищаем состояние пользователя
+        user_states.pop(user_id, None)
+        
+        # Получаем информацию о новом слоте для отображения
+        date_str, time_str = new_slot_id.split("_")
+        slot_date = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = slot_date.strftime("%d.%m.%Y")
+        end_hour = int(time_str.split(":")[0]) + 1
+        time_display = f"{time_str}-{end_hour:02d}:00"
+        
+        # Формируем текст подтверждения
+        position_text = "1 место (первый в очереди)" if new_position == 1 else f"{new_position} место"
+        
+        confirmation_text = (
+            f"✅ **Перезапись выполнена успешно!**\n\n"
+            f"📅 **Новое время консультации:**\n"
+            f"🗓 Дата: {formatted_date}\n"
+            f"🕐 Время: {time_display}\n"
+            f"📍 Ваша позиция: **{position_text}**\n\n"
+            f"🔔 **Напоминания:**\n"
+            f"• За 24 часа до консультации\n"
+            f"• За 1 час до консультации\n\n"
+            f"✨ Рекомендуем добавить дату в календарь!"
+        )
+        
+        # Добавляем дополнительную информацию для тех, кто не первый
+        if new_position > 1:
+            confirmation_text += (
+                f"\n\n💡 **Обратите внимание:**\n"
+                f"Если участники впереди вас откажутся от консультации, "
+                f"вы автоматически продвинетесь в очереди и получите уведомление."
+            )
+        
+        # Отправляем подтверждение с кнопками
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu"),
+            types.InlineKeyboardButton("📅 Мои консультации", callback_data="my_consultations")
+        )
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=confirmation_text,
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        print(f"[ERROR] Ошибка в handle_rebooking_confirmation: {e}")
+        bot.answer_callback_query(call.id, "❌ Произошла ошибка при перезаписи")
 
 def send_long_message(bot, chat_id, text, reply_markup=None, parse_mode=None):
     """Отправляет длинные сообщения по частям"""
@@ -1921,6 +2441,18 @@ def handle_callback_query(call):
         return
     elif call.data.startswith("cancel_booking_"):
         handle_cancel_booking(call)
+        return
+    elif call.data.startswith("manual_rebooking_"):
+        handle_manual_rebooking(call)
+        return
+    elif call.data.startswith("auto_rebooking_"):
+        handle_auto_rebooking(call)
+        return
+    elif call.data.startswith("cancel_rebooking_"):
+        handle_cancel_rebooking(call)
+        return
+    elif call.data.startswith("rebooking_") and not call.data.startswith("manual_rebooking_") and not call.data.startswith("auto_rebooking_") and not call.data.startswith("cancel_rebooking_"):
+        handle_rebooking_confirmation(call)
         return
     elif call.data == "bot_info":
         handle_bot_info(call)
