@@ -2219,7 +2219,7 @@ def handle_all_messages(message):
             
         #     handle_lawyer_question(message)
         #     return
-        if user and user.get("message_limit", 0) > 0:
+        if user and user.get("access", False) and user.get("message_limit", 0) > 0:
             handle_lawyer_question(message)
             return
             
@@ -2275,6 +2275,76 @@ def handle_channel_message(message):
     except Exception as e:
         print(f"[ERROR] Ошибка в канале: {e}")
 
+@bot.message_handler(content_types=['text'])     # <-- ключевая строка
+def handle_all_messages(message):
+    """
+    Универсальный обработчик обычных текстовых сообщений,
+    который решает, нужно ли:
+    • передать вопрос юристу,
+    • ждать PDF,
+    • или отправить в SmartHandler.
+    """
+    user_id = message.from_user.id
+    current_state = user_states.get(user_id)
+
+    # 1️⃣ Пользователь в режиме переписки с юристом
+    if current_state == "lawyer_consultation":
+        handle_lawyer_question(message)
+        return
+
+    # 2️⃣ Пользователь уже нажал «проверить отчёт / банкротный калькулятор / список кредиторов»,
+    #    но вместо PDF прислал текст
+    if current_state in [
+        "waiting_credit_report",
+        "waiting_bankruptcy_report",
+        "waiting_creditors_list"
+    ]:
+        file_type_map = {
+            "waiting_credit_report": "кредитного отчёта",
+            "waiting_bankruptcy_report": "отчёта для банкротного анализа",
+            "waiting_creditors_list": "отчёта для списка кредиторов"
+        }
+        bot.reply_to(
+            message,
+            f"📄 Пожалуйста, отправьте PDF-файл {file_type_map[current_state]}.\n"
+            "Текстовые сообщения в этом режиме не обрабатываются."
+        )
+        return
+
+    # 3️⃣ Админ временно общается с конкретным пользователем
+    if current_state and current_state.startswith("admin_messaging_"):
+        target_user_id = int(current_state.replace("admin_messaging_", ""))
+        admin_message = message.text
+        try:
+            bot.send_message(
+                chat_id=target_user_id,
+                text=f"📩 **Сообщение от администратора:**\n\n{admin_message}",
+                parse_mode='Markdown'
+            )
+            bot.reply_to(
+                message,
+                f"✅ Сообщение отправлено пользователю {target_user_id}"
+            )
+        except Exception as e:
+            bot.reply_to(
+                message,
+                f"❌ Не удалось отправить сообщение: {e}"
+            )
+        user_states.pop(user_id, None)
+        return
+
+    # 4️⃣ Если у пользователя ЕСТЬ access **и** ещё остались токены — считаем это вопросом к юристу
+    try:
+        user = users_collection.find_one({"user_id": user_id})
+        if user and user.get("access") and user.get("message_limit", 0) > 0:
+            handle_lawyer_question(message)
+            return
+    except Exception as db_err:
+        # Не критично: если не смогли проверить БД — пускаем сообщение дальше
+        print(f"[WARN] DB check failed: {db_err}")
+
+    # 5️⃣ Всё остальное → SmartHandler (новые пользователи / без access / без токенов)
+    smart_handler.handle_message(message)
 # Запуск бота
 if __name__ == "__main__":
     print("[INFO] Бот запущен...")
