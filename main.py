@@ -449,7 +449,7 @@ def handle_cancel_booking(call):
             parse_mode='Markdown'
         )
 
-        print(f"[INFO] Пользователь {user_id} отменил запись на {slot_id}, позиция {cancelled_position}")
+        if DEBUG_MODE: print(f"[INFO] Пользователь {user_id} отменил запись на {slot_id}, позиция {cancelled_position}")
 
     except Exception as e:
         print(f"[ERROR] Ошибка отмены записи: {e}")
@@ -1025,28 +1025,8 @@ def handle_video_courses(call):
 
 def handle_free_consultation_request(call):
     """Обработка запроса на бесплатную консультацию"""
-
-def handle_course_selection(call):
-    """Показать модули выбранного курса"""
     user_id = call.from_user.id
-    course_id = call.data.replace("course_", "")
-
-    if not video_course_manager.check_course_access(user_id):
-        bot.answer_callback_query(call.id, "⛔ Доступ к курсу закрыт")
-        return
-
-    markup = video_course_manager.create_modules_menu(course_id, user_id)
-    courses = video_course_manager.get_available_courses()
-    course_title = next((c["title"] for c in courses if c["course_id"] == course_id), "Курс")
-
-    bot.edit_message_text(
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        text=f"📚 **{course_title}**\n\nВыберите модуль:",
-        reply_markup=markup,
-        parse_mode='Markdown'
-    )
-    user_id = call.from_user.id
+    user_states[user_id] = "selecting_consultation_slot"
     
     # Получаем доступные слоты на ближайшие понедельники
     available_slots = get_available_consultation_slots()
@@ -1093,27 +1073,26 @@ def handle_course_selection(call):
         parse_mode='Markdown'
     )
 
-# Используем существующую функцию из document_processor
+def handle_course_selection(call):
+    """Показать модули выбранного курса"""
+    user_id = call.from_user.id
+    course_id = call.data.replace("course_", "")
 
-# Также нужно обновить функцию handle_document для поддержки банкротного режима:
-@bot.message_handler(content_types=['document'])
-def handle_document(message):
-    """Обработка документов (PDF для кредитных отчетов и чеки об оплате)"""
-    user_id = message.from_user.id
-    current_state = user_states.get(user_id)
-    
-    if current_state in ["waiting_credit_report", "waiting_bankruptcy_report"]:
-        # Обработка кредитного отчета (включая банкротный анализ)
-        handle_credit_report_pdf(message)
-    elif current_state == "waiting_creditors_list":  # ⭐ НОВОЕ УСЛОВИЕ
-        # Обработка создания списка кредиторов
-        handle_creditors_list_pdf(message)
-    else:
-        # Обработка чека об оплате (существующая логика)
-        handle_payment_receipt(message)
+    if not video_course_manager.check_course_access(user_id):
+        bot.answer_callback_query(call.id, "⛔ Доступ к курсу закрыт")
+        return
 
-# Добавить в main.py
+    markup = video_course_manager.create_modules_menu(course_id, user_id)
+    courses = video_course_manager.get_available_courses()
+    course_title = next((c["title"] for c in courses if c["course_id"] == course_id), "Курс")
 
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=f"📚 **{course_title}**\n\nВыберите модуль:",
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
 # Модифицировать функцию handle_credit_report_pdf:
 def handle_credit_report_pdf(message):
     """Обработка PDF файла кредитного отчета с генерацией заявлений И банкротным анализом"""
@@ -1210,7 +1189,7 @@ def handle_credit_report_pdf(message):
             
         else:
             # 📊 ОБЫЧНЫЙ РЕЖИМ: используем старый парсинг (не трогаем)
-            print(f"[INFO] Обычный режим: используем старую логику парсинга")
+            # if DEBUG_MODE: print(f"[INFO] Обычный режим: используем старую логику парсинга")
             
             # Импортируем старые модули
             from text_extractor import extract_text_from_pdf
@@ -1228,7 +1207,7 @@ def handle_credit_report_pdf(message):
         # Сохраняем в БД (однократно)  
         try:
             process_uploaded_file(file_path, user_id)
-            print(f"[INFO] Кредитный отчет пользователя {user_id} сохранен в БД")
+            # if DEBUG_MODE: print(f"[INFO] Кредитный отчет пользователя {user_id} сохранен в БД")
         except Exception as save_error:
             print(f"[ERROR] Ошибка сохранения в БД: {save_error}")
 
@@ -1414,7 +1393,7 @@ def handle_credit_report_pdf(message):
         
         # Логируем успешную обработку
         mode = "банкротного анализа" if is_bankruptcy_mode else "кредитного отчета"
-        print(f"[INFO] Успешно обработан {mode} пользователя {user_id}")
+        # if DEBUG_MODE: print(f"[INFO] Успешно обработан {mode} пользователя {user_id}")
         
     except Exception as e:
         print(f"[ERROR] Ошибка при обработке: {e}")
@@ -1555,7 +1534,7 @@ def handle_creditors_list_pdf(message):
         user_states.pop(user_id, None)
         
         # Логируем успешную обработку
-        print(f"[INFO] Создан список кредиторов для пользователя {user_id}")
+        # if DEBUG_MODE: print(f"[INFO] Создан список кредиторов для пользователя {user_id}")
         
     except Exception as e:
         print(f"[ERROR] Ошибка создания списка кредиторов: {e}")
@@ -1965,48 +1944,40 @@ def handle_callback_query(call):
         return  # ← ВЫХОДИМ, НЕ ОЧИЩАЕМ СОСТОЯНИЕ!
     if call.data == "lawyer_consultation":
         handle_lawyer_consultation(call)
+        return
     elif call.data == "check_credit_report":
         handle_credit_report_request(call)
+        return
     elif call.data == "bankruptcy_calculator":
         handle_bankruptcy_calculator(call)
-    elif call.data == "creditors_list":  # ⭐ НОВАЯ СТРОКА
+        return
+    elif call.data == "creditors_list":
         handle_creditors_list_request(call)
+        return
     elif call.data == "video_courses":
         handle_video_courses(call)
-
+        return
     elif call.data.startswith("course_"):
         handle_course_selection(call)
-
+        return
     elif call.data == "free_consultation":
         handle_free_consultation_request(call)
+        return
     elif call.data.startswith("book_slot_"):
         handle_slot_booking(call)
+        return
     elif call.data == "my_consultations":
         handle_my_consultations(call)
+        return
     elif call.data.startswith("cancel_booking_"):
         handle_cancel_booking(call)
+        return
     elif call.data == "bot_info":
         handle_bot_info(call)
+        return
     elif call.data == "how_to_get_report":
         handle_how_to_get_report(call)
-    elif call.data.startswith("admin_"):
-        from admin_consultation import AdminConsultationManager
-        manager = AdminConsultationManager(bot, user_states)
-
-        # Обработка ручной отправки напоминаний
-        if call.data == "admin_send_reminders":
-            manager.manual_send_reminders(call)
-        else:
-            manager.handle_admin_callback(call)
-            
-    elif call.data.startswith("confirm_day_"):
-        booking_id = call.data.replace("confirm_day_", "")
-        confirm_consultation_participation(call, booking_id, "day")
-    elif call.data.startswith("cancel_day_"):
-        booking_id = call.data.replace("cancel_day_", "")
-        cancel_consultation_booking(call, booking_id, "not_available_day_before")
-    elif call.data.startswith("confirm_hour_"):
-        booking_id = call.data.replace("confirm_hour_", "")
+        return
         confirm_consultation_participation(call, booking_id, "hour")
     elif call.data.startswith("cancel_hour_"):
         booking_id = call.data.replace("cancel_hour_", "")
@@ -2266,7 +2237,22 @@ def handle_forwarded(message):
 
 # ЗАМЕНИТЬ ФУНКЦИЮ handle_all_messages на эту:
 
-@bot.message_handler(func=lambda message: True)
+@bot.message_handler(content_types=['document'])
+def handle_document(message):
+    """Обработка загруженных документов"""
+    user_id = message.from_user.id
+    current_state = user_states.get(user_id)
+    
+    # Проверяем состояние пользователя
+    if current_state in ["waiting_credit_report", "waiting_bankruptcy_report"]:
+        # Обработка кредитного отчета (включая банкротный анализ)
+        handle_credit_report_pdf(message)
+    elif current_state == "waiting_creditors_list":
+        # Обработка создания списка кредиторов
+        handle_creditors_list_pdf(message)
+    else:
+        # Обработка чека об оплате (существующая логика)
+        handle_payment_receipt(message)
 def handle_all_messages(message):
     """Улучшенная обработка всех сообщений с умным анализом"""
     user_id = message.from_user.id

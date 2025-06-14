@@ -55,6 +55,6 @@ def process_uploaded_file(filepath, user_id):
                 debug_file.write(f"Режим: {env}\n")
                 debug_file.write("="*60 + "\n\n")
                 debug_file.write(text)
-            print(f"[DEBUG] Текст сохранен в {debug_filename}")
+            # print(f"[DEBUG] Текст сохранен в {debug_filename}")
         except Exception as debug_error:
             print(f"[ERROR] Не удалось сохранить debug файл: {debug_error}")
