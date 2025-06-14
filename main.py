@@ -1705,7 +1705,47 @@ def test_channel(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка отправки: {e}")
 
-@bot.callback_query_handler(func=lambda call: call.data in ["confirm_broadcast", "cancel_broadcast"])
+@bot.callback_query_handler(func=lambda call: call.data.startswith("module_"))
+def handle_module_selection(call):
+    module_id = call.data.replace("module_", "")
+    markup = video_course_manager.create_lessons_menu(module_id, call.from_user.id)
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="Выберите урок:",
+        reply_markup=markup
+    )
+
+# ---------- 2.2 Отправить видео и пометить «просмотрено» ----------
+@bot.callback_query_handler(func=lambda c: c.data.startswith("lesson_"))
+def handle_lesson_selection(call):
+    # print("[DEBUG lesson callback]", call.data)      # ← вот сюда
+    lesson_id = call.data    
+    lesson    = video_course_manager.get_lesson_by_id(lesson_id)
+
+    if not lesson:
+        bot.answer_callback_query(call.id, "Урок не найден")
+        return
+
+    # копируем видео-пост из приватного канала к пользователю
+    try:
+        # channel_id = -1002275474152  (минус обязателен)
+        bot.copy_message(
+            chat_id      = call.from_user.id,
+            from_chat_id = -1002275474152,
+            message_id   = int(lesson["video_url"].split("/")[-1])
+        )
+    except Exception as e:
+        bot.answer_callback_query(call.id, f"Ошибка отправки видео: {e}")
+        return
+
+    # отмечаем урок как завершён
+    video_course_manager.mark_lesson_completed(call.from_user.id, lesson_id)
+
+    # небольшая реакция на нажатие
+    bot.answer_callback_query(call.id, "Урок отправлен!")
+
 def handle_broadcast_callback(call):
     """Обработка подтверждения/отмены рассылки"""
     ADMIN_USER_IDS = [376068212, 827743984]
@@ -1887,7 +1927,6 @@ def handle_callback_query(call):
     elif call.data == "how_to_get_report":
         handle_how_to_get_report(call)
         return
-        confirm_consultation_participation(call, booking_id, "hour")
     elif call.data.startswith("cancel_hour_"):
         booking_id = call.data.replace("cancel_hour_", "")
         cancel_consultation_booking(call, booking_id, "not_available_hour_before")
@@ -2153,12 +2192,7 @@ def handle_document(message):
     else:
         # Обработка чека об оплате (существующая логика)
         handle_payment_receipt(message)
-def handle_all_messages(message):
-    """Улучшенная обработка всех сообщений с умным анализом"""
-    user_id = message.from_user.id
-    # print(f"[TRACE] handle_all_messages вызван для {user_id}")
-    # print(f"[TRACE] id(user_states): {id(user_states)}") 
-    current_state = user_states.get(user_id)
+# Удалена дублирующаяся функция handle_all_messages - используется версия с декоратором внизу файла
     # print(f"[DEBUG] Состояние: {current_state}")
 
     # 🔧 ОТЛАДКА: проверяем состояние админа

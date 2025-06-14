@@ -1713,7 +1713,7 @@ def generate_creditors_list_pdf_IMPROVED(parsed_data):
         # Сборка PDF
         doc.build(elements)
         
-        print(f"✅ PDF создан успешно: {tmp_file.name}")
+        # print(f"✅ PDF создан успешно: {tmp_file.name}")
         return tmp_file.name
 
     except Exception as e:

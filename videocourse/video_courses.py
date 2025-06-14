@@ -9,6 +9,7 @@ load_dotenv()
 # Подключение к базе (как в main.py)
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
+print(client['telegram_bot']['lessons'].find_one({"lesson_id": "lesson_1_1"}))
 db = client['telegram_bot']
 
 # Те же коллекции, что создавали
@@ -249,6 +250,37 @@ class VideoCourseManager:
         markup.add(types.InlineKeyboardButton("🔙 К курсам", callback_data="video_courses"))
         
         return markup
+    
+    def create_lessons_menu(self, module_id, user_id):
+        """Кнопки-уроки в выбранном модуле"""
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        course_id = module_id.split('_', 1)[0]          # ← вычисляем один раз
+        lessons   = self.get_module_lessons(module_id)
+
+        if not lessons:
+            markup.add(types.InlineKeyboardButton(
+                "🔙 К модулям",
+                callback_data=f"course_{course_id}")
+            )
+            return markup
+
+        completed = self.get_user_progress(user_id, course_id).get("completed_lessons", [])
+
+        for lesson in lessons:
+            lid   = lesson["lesson_id"]
+            title = lesson["title"]
+
+            # если просмотрено – ставим галочку
+            prefix = "✅ " if lid in completed else "🎥 "
+            markup.add(types.InlineKeyboardButton(
+                prefix + title,
+                callback_data=lid 
+            ))
+
+        # кнопка «Назад к модулям»
+        markup.add(types.InlineKeyboardButton("🔙 К модулям", callback_data=f"course_{course_id}"))
+        return markup
+
     pass
 
 # Расширенный тест
