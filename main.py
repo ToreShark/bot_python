@@ -1734,7 +1734,8 @@ def handle_lesson_selection(call):
         bot.copy_message(
             chat_id      = call.from_user.id,
             from_chat_id = -1002275474152,
-            message_id   = int(lesson["video_url"].split("/")[-1])
+            message_id   = int(lesson["video_url"].split("/")[-1]),
+            protect_content=True
         )
     except Exception as e:
         bot.answer_callback_query(call.id, f"Ошибка отправки видео: {e}")
