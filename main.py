@@ -1029,7 +1029,108 @@ def handle_rebooking_confirmation(call):
     except Exception as e:
         print(f"[ERROR] Ошибка в handle_rebooking_confirmation: {e}")
         bot.answer_callback_query(call.id, "❌ Произошла ошибка при перезаписи")
-=======
+
+def handle_day_confirmation(call):
+    """Обработка подтверждения участия на консультации"""
+    from bson import ObjectId
+    from datetime import datetime
+    
+    try:
+        # Извлекаем booking_id из callback_data: confirm_day_{booking_id}
+        booking_id = call.data.replace("confirm_day_", "")
+        
+        # Найти запись
+        booking = consultation_queue_collection.find_one({"_id": ObjectId(booking_id)})
+        if not booking:
+            bot.answer_callback_query(call.id, "❌ Запись не найдена")
+            return
+        
+        # Обновить статус на "confirmed_day"
+        consultation_queue_collection.update_one(
+            {"_id": ObjectId(booking_id)},
+            {"$set": {"status": "confirmed_day", "confirmed_at": datetime.utcnow()}}
+        )
+        
+        # Отправить подтверждение
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="✅ **Участие подтверждено!**\n\nВам придет напоминание за час до начала.",
+            parse_mode='Markdown'
+        )
+        
+        bot.answer_callback_query(call.id, "✅ Участие подтверждено!")
+        
+    except Exception as e:
+        print(f"[ERROR] Ошибка в handle_day_confirmation: {e}")
+        bot.answer_callback_query(call.id, "❌ Произошла ошибка")
+
+def handle_day_cancellation(call):
+    """Обработка отмены участия в консультации"""
+    from bson import ObjectId
+    from datetime import datetime
+    
+    try:
+        # Извлекаем booking_id из callback_data: cancel_day_{booking_id}
+        booking_id = call.data.replace("cancel_day_", "")
+        
+        # Найти запись
+        booking = consultation_queue_collection.find_one({"_id": ObjectId(booking_id)})
+        if not booking:
+            bot.answer_callback_query(call.id, "❌ Запись не найдена")
+            return
+        
+        # Обновить статус на "cancelled"
+        consultation_queue_collection.update_one(
+            {"_id": ObjectId(booking_id)},
+            {"$set": {
+                "status": "cancelled", 
+                "cancelled_at": datetime.utcnow(),
+                "cancelled_reason": "user_declined"
+            }}
+        )
+        
+        # Отправить подтверждение отмены
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="❌ **Участие отменено**\n\nВаше место освобождено для других участников.",
+            parse_mode='Markdown'
+        )
+        
+        bot.answer_callback_query(call.id, "❌ Участие отменено")
+        
+        # Продвинуть очередь если это был первый в очереди
+        slot_id = booking["slot_id"]
+        if booking["position"] == 1:
+            # Найти следующего в очереди
+            next_booking = consultation_queue_collection.find_one({
+                "slot_id": slot_id,
+                "position": 2,
+                "status": {"$nin": ["cancelled", "completed"]}
+            })
+            
+            if next_booking:
+                # Продвинуть на первое место
+                consultation_queue_collection.update_one(
+                    {"_id": next_booking["_id"]},
+                    {"$set": {"position": 1}}
+                )
+                
+                # Уведомить нового первого участника
+                try:
+                    bot.send_message(
+                        chat_id=next_booking["user_id"],
+                        text="🎉 **Освободилось место!**\n\nВы стали первым в очереди на консультацию. Пожалуйста, подтвердите участие.",
+                        parse_mode='Markdown'
+                    )
+                except Exception as notify_error:
+                    print(f"[ERROR] Не удалось уведомить пользователя: {notify_error}")
+        
+    except Exception as e:
+        print(f"[ERROR] Ошибка в handle_day_cancellation: {e}")
+        bot.answer_callback_query(call.id, "❌ Произошла ошибка")
+
 def handle_reschedule_auto(call, booking_id):
     """Автоматическая запись пользователя на следующий свободный слот"""
     from bson import ObjectId
@@ -2485,6 +2586,10 @@ def handle_admin_cancel_slot(call):
     slot_id = call.data.replace("admin_cancel_slot_", "")
     admin_manager.cancel_slot(call, slot_id)
 
+@bot.callback_query_handler(func=lambda call: call.data == "admin_send_reminders")
+def handle_admin_send_reminders(call):
+    admin_manager.manual_send_reminders(call)
+
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback_query(call):
@@ -2579,6 +2684,10 @@ def handle_callback_query(call):
     # ДОБАВИТЬ ЭТИ СТРОКИ:
     elif call.data in ["confirm_broadcast", "cancel_broadcast"]:
         handle_broadcast_callback(call)
+    elif call.data.startswith("confirm_day_"):
+        handle_day_confirmation(call)
+    elif call.data.startswith("cancel_day_"):
+        handle_day_cancellation(call)
     
 
 # Пример текста для первой рассылки о новых функциях:
