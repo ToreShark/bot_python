@@ -87,7 +87,7 @@ class AdminConsultationManager:
         today_str = today.strftime("%Y-%m-%d")
         readable_date = today.strftime("%d.%m.%Y")
 
-        slots = list(consultation_queue_collection.find({"date": today_str}).sort("time_slot", 1))
+        slots = list(consultation_slots_collection.find({"date": today_str}).sort("time_slot", 1))
 
         if not slots:
             self.bot.send_message(message.chat.id, f"📅 На сегодня ({readable_date}) слоты не найдены.")
