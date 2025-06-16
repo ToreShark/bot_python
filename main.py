@@ -1724,6 +1724,8 @@ def handle_credit_report_pdf(message):
     
     # Определяем тип обработки по состоянию пользователя
     is_bankruptcy_mode = current_state == "waiting_bankruptcy_report"
+    is_creditors_list_mode = current_state == "waiting_creditors_list"
+    is_credit_report_mode = current_state == "waiting_credit_report"
     
     try:
         # Проверяем, что это PDF файл
@@ -1983,6 +1985,9 @@ def handle_credit_report_pdf(message):
                              f"4. Рассмотрите рекомендации по банкротству",
                         parse_mode='Markdown'
                     )
+                    
+                    # НЕ сбрасываем состояние здесь - оно установится в конце функции
+                    pass
                 else:
                     # Если заявления не сгенерированы, все равно показываем банкротный анализ
                     bankruptcy_analysis = analyze_credit_report_for_bankruptcy(parsed_data)
@@ -1992,12 +1997,15 @@ def handle_credit_report_pdf(message):
                         text=f"🧮 **ДОПОЛНИТЕЛЬНО: Банкротный анализ**\n\n{bankruptcy_analysis}",
                         parse_mode='Markdown'
                     )
+                    
+                    # Состояние будет установлено в конце функции
             else:
                 bot.send_message(
                     chat_id=message.chat.id,
                     text="❌ Не удалось обработать файл.\nПроверьте, что это корректный кредитный отчет.",
                     reply_markup=markup
                 )
+                # Состояние будет установлено в конце функции при любом исходе
         
         # Удаляем исходный временный файл
         try:
@@ -2012,7 +2020,17 @@ def handle_credit_report_pdf(message):
             pass
         
         # Сбрасываем состояние пользователя
-        user_states.pop(user_id, None)
+        if is_bankruptcy_mode:
+            # После банкротного анализа даем пользователю время на изучение результата
+            user_states[user_id] = "bankruptcy_analysis_completed"
+        elif is_creditors_list_mode:
+            # После создания списка кредиторов даем пользователю время на изучение
+            user_states[user_id] = "creditors_list_completed"
+        elif is_credit_report_mode:
+            # После проверки кредитного отчета даем пользователю время на изучение
+            user_states[user_id] = "credit_report_completed"
+        else:
+            user_states.pop(user_id, None)
         
         # Логируем успешную обработку
         mode = "банкротного анализа" if is_bankruptcy_mode else "кредитного отчета"
@@ -2930,12 +2948,15 @@ def handle_document(message):
     if current_state in ["waiting_credit_report", "waiting_bankruptcy_report"]:
         # Обработка кредитного отчета (включая банкротный анализ)
         handle_credit_report_pdf(message)
+        return
     elif current_state == "waiting_creditors_list":
         # Обработка создания списка кредиторов
         handle_creditors_list_pdf(message)
+        return
     else:
         # Обработка чека об оплате (существующая логика)
         handle_payment_receipt(message)
+        return
 # Удалена дублирующаяся функция handle_all_messages - используется версия с декоратором внизу файла
     # print(f"[DEBUG] Состояние: {current_state}")
 
@@ -3070,7 +3091,23 @@ def handle_all_messages(message):
         handle_lawyer_question(message)
         return
 
-    # 2️⃣ Пользователь уже нажал «проверить отчёт / банкротный калькулятор / список кредиторов»,
+    # 2️⃣ ПЕРЕМЕСТИТЬ СЮДА проверку завершенных анализов - ДО проверки access
+    if current_state in ["bankruptcy_analysis_completed", "creditors_list_completed", "credit_report_completed"]:
+        # Очищаем состояние
+        user_states.pop(user_id, None)
+        
+        # Показываем только кнопку меню
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu"))
+        
+        bot.send_message(
+            message.chat.id,
+            "Для продолжения работы воспользуйтесь меню.",
+            reply_markup=markup
+        )
+        return
+
+    # 3️⃣ Пользователь уже нажал «проверить отчёт / банкротный калькулятор / список кредиторов»,
     #    но вместо PDF прислал текст
     if current_state in [
         "waiting_credit_report",
@@ -3089,7 +3126,7 @@ def handle_all_messages(message):
         )
         return
 
-    # 3️⃣ Админ временно общается с конкретным пользователем
+    # 4️⃣ Админ временно общается с конкретным пользователем
     if current_state and current_state.startswith("admin_messaging_"):
         target_user_id = int(current_state.replace("admin_messaging_", ""))
         admin_message = message.text
@@ -3111,7 +3148,7 @@ def handle_all_messages(message):
         user_states.pop(user_id, None)
         return
 
-    # 4️⃣ Если у пользователя ЕСТЬ access **и** ещё остались токены — считаем это вопросом к юристу
+    # 5️⃣ Если у пользователя ЕСТЬ access **и** ещё остались токены — считаем это вопросом к юристу
     try:
         user = users_collection.find_one({"user_id": user_id})
         if user and user.get("access") and user.get("message_limit", 0) > 0:
@@ -3121,7 +3158,7 @@ def handle_all_messages(message):
         # Не критично: если не смогли проверить БД — пускаем сообщение дальше
         print(f"[WARN] DB check failed: {db_err}")
 
-    # 5️⃣ Всё остальное → SmartHandler (новые пользователи / без access / без токенов)
+    # 6️⃣ Всё остальное → SmartHandler (новые пользователи / без access / без токенов)
     smart_handler.handle_message(message)
 # Запуск бота
 if __name__ == "__main__":
