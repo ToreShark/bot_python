@@ -71,7 +71,7 @@ main_course = {
     "modules": ["extrajudicial_module", "recovery_module", "judicial_module"],
     "created_at": datetime.utcnow(),
     "is_active": True,
-    "total_lessons": 8,
+    "total_lessons": 9,
     "estimated_duration": "4 часа",
 }
 
@@ -83,9 +83,9 @@ modules_data = [
         "course_id": "bankruptcy_kz",
         "title": "Модуль 1: Внесудебное банкротство",
         "description": "От основ банкротства до подачи заявления на внесудебную процедуру",
-        "lessons": ["lesson_1_1", "lesson_1_2", "lesson_1_3"],
+        "lessons": ["lesson_1_1", "lesson_1_2", "lesson_1_3", "lesson_1_4"],
         "order": 1,
-        "estimated_duration": "90 минут",
+        "estimated_duration": "120 минут",
     },
     # Модуль 2: Восстановление платежеспособности
     {
@@ -138,6 +138,15 @@ lessons_data = [
         "video_url": "https://t.me/c/2275474152/13",
         "duration": "30 минут",
         "order": 3,
+    },
+    {
+        "lesson_id": "lesson_1_4",
+        "module_id": "extrajudicial_module",
+        "title": "Урок 1.4: Что делать при отказе во внесудебном банкротстве",
+        "description": "Пошаговые действия при получении отказа",
+        "video_url": "https://t.me/c/2275474152/34",
+        "duration": "30 минут",
+        "order": 4,
     },
     # ───────── Модуль 2: Восстановление платежеспособности ─────────
     {
