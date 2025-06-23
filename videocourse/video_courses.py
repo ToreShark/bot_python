@@ -318,7 +318,7 @@ if __name__ == "__main__":
                 print(f"   Ссылка на видео: {first_lesson['video_url']}")
                 
                 # 4. Тестируем прогресс
-                user_id = 376068212  # ЗАМЕНИТЕ НА СВОЙ ID
+                user_id = 7920066963  # ЗАМЕНИТЕ НА СВОЙ ID
                 progress = manager.get_user_progress(user_id, course_id)
                 print(f"\n👤 Прогресс пользователя {user_id}:")
                 print(f"   Завершено уроков: {len(progress.get('completed_lessons', []))}")
