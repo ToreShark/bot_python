@@ -1,7 +1,7 @@
 from credit_parser import create_parser_chain
 
 def test_full_integration():
-    with open('debug_text_output_376068212_972e044a.txt', 'r', encoding='utf-8') as f:
+    with open('debug_text_output_7920066963_972e044a.txt', 'r', encoding='utf-8') as f:
         text = f.read()
     
     parser = create_parser_chain()

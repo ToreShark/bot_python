@@ -15,13 +15,13 @@ load_dotenv()
 
 DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() == "true"
 env = "dev" if DEBUG_MODE else "prod"
-ADMIN_IDS = [376068212, 827743984]  # Добавьте нужные ID администраторов
+ADMIN_IDS = [7920066963, 827743984]  # Добавьте нужные ID администраторов
 
 class AdminConsultationManager:
     def __init__(self, bot, user_states_dict):
         self.bot = bot
         self.user_states = user_states_dict
-        self.ADMIN_IDS = [376068212, 827743984]  # Добавьте нужные ID
+        self.ADMIN_IDS = [7920066963, 827743984]  # Добавьте нужные ID
 
     def show_admin_menu(self, message):
         if message.from_user.id not in self.ADMIN_IDS:

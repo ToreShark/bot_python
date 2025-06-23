@@ -1295,7 +1295,7 @@ def main(message):
     )
     
     # Уведомление админу
-    ADMIN_USER_IDS = [376068212, 827743984]
+    ADMIN_USER_IDS = [7920066963, 827743984]
     if user_id not in ADMIN_USER_IDS:
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         admin_text = (
@@ -1312,7 +1312,7 @@ def main(message):
 
 @bot.message_handler(commands=['slots_today'])
 def view_today_slots(message):
-    ADMIN_USER_IDS = [376068212, 827743984]
+    ADMIN_USER_IDS = [7920066963, 827743984]
     if message.from_user.id not in ADMIN_USER_IDS:
         bot.send_message(message.chat.id, "⛔️ У вас нет доступа.")
         return
@@ -2229,7 +2229,7 @@ def handle_payment_receipt(message):
             print(f"[WARN] Не удалось удалить файл {file_path}: {e}")
 
     # Уведомление админов
-    ADMIN_USER_IDS = [376068212, 827743984]
+    ADMIN_USER_IDS = [7920066963, 827743984]
     caption = (
         f"📩 Получен чек об оплате:\n"
         f"👤 Пользователь: {user_id}\n"
@@ -2252,7 +2252,7 @@ def handle_payment_receipt(message):
 @bot.message_handler(commands=['broadcast'])
 def broadcast_message(message):
     """Массовая рассылка сообщений всем пользователям (только для администраторов)"""
-    ADMIN_USER_IDS = [376068212, 827743984]
+    ADMIN_USER_IDS = [7920066963, 827743984]
     if message.from_user.id not in ADMIN_USER_IDS:
         bot.reply_to(message, "⛔ У вас нет прав для выполнения этой команды.")
         return
@@ -2312,7 +2312,7 @@ def broadcast_message(message):
 @bot.message_handler(commands=['grant_access'])
 def grant_access(message):
     """Даёт доступ пользователю"""
-    ADMIN_USER_IDS = [376068212, 827743984]
+    ADMIN_USER_IDS = [7920066963, 827743984]
     if message.from_user.id not in ADMIN_USER_IDS:
         return
 
@@ -2357,7 +2357,7 @@ def grant_access(message):
 @bot.message_handler(commands=['revoke_access'])
 def revoke_access(message):
     """Отзывает доступ у пользователя"""
-    ADMIN_USER_IDS = [376068212, 827743984]
+    ADMIN_USER_IDS = [7920066963, 827743984]
     if message.from_user.id not in ADMIN_USER_IDS:
         return
 
@@ -2397,7 +2397,7 @@ def revoke_access(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка: {e}")
     """Проверяем что в базе данных у пользователя"""
-    ADMIN_USER_IDS = [376068212, 827743984]
+    ADMIN_USER_IDS = [7920066963, 827743984]
     if message.from_user.id not in ADMIN_USER_IDS:
         return
 
@@ -2426,7 +2426,7 @@ def revoke_access(message):
 
 @bot.message_handler(commands=['test_channel'])
 def test_channel(message):
-    ADMIN_IDS = [376068212, 827743984]
+    ADMIN_IDS = [7920066963, 827743984]
     if message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ запрещен.")
         return
@@ -2481,7 +2481,7 @@ def handle_lesson_selection(call):
 
 def handle_broadcast_callback(call):
     """Обработка подтверждения/отмены рассылки"""
-    ADMIN_USER_IDS = [376068212, 827743984]
+    ADMIN_USER_IDS = [7920066963, 827743984]
     if call.from_user.id not in ADMIN_USER_IDS:
         bot.answer_callback_query(call.id, "⛔ Доступ запрещен")
         return
@@ -2577,7 +2577,7 @@ admin_manager = AdminConsultationManager(bot,user_states)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_slots_today")
 def handle_admin_slots_today(call):
-    ADMIN_USER_IDS = [376068212, 827743984]
+    ADMIN_USER_IDS = [7920066963, 827743984]
     if call.from_user.id not in ADMIN_USER_IDS:
         bot.send_message(call.message.chat.id, "⛔️ У вас нет доступа.")
         return
@@ -2620,7 +2620,7 @@ def handle_callback_query(call):
         pass
     user_id = call.from_user.id
     # ✅ ДОБАВИТЬ ЭТУ ПРОВЕРКУ В НАЧАЛО:
-    ADMIN_IDS = [376068212, 827743984]
+    ADMIN_IDS = [7920066963, 827743984]
     if user_id in ADMIN_IDS and call.data.startswith("admin_"):
         # print(f"[DEBUG] Админский callback: {call.data}")
         # Передаем админские callback в AdminConsultationManager
@@ -2754,7 +2754,7 @@ def handle_lawyer_question(message):
         return
 
     # Проверки ограничений (как в оригинальном коде)
-    ADMIN_USER_IDS = [376068212, 827743984]
+    ADMIN_USER_IDS = [7920066963, 827743984]
     if user_id not in ADMIN_USER_IDS:
         today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
         message_count = users_collection.count_documents({
@@ -2895,7 +2895,7 @@ def handle_how_to_get_report(call):
 # И добавьте эту команду:
 @bot.message_handler(commands=['get_channel_id'])
 def get_channel_id(message):
-    ADMIN_IDS = [376068212, 827743984]  # ваши ID
+    ADMIN_IDS = [7920066963, 827743984]  # ваши ID
     if message.from_user.id not in ADMIN_IDS:
         return
     
@@ -2904,7 +2904,7 @@ def get_channel_id(message):
 # Новый обработчик только для пересылки
 @bot.message_handler(content_types=['text'], func=lambda message: message.forward_from_chat is not None)
 def handle_forwarded(message):
-    ADMIN_IDS = [376068212, 827743984]
+    ADMIN_IDS = [7920066963, 827743984]
     if message.from_user.id not in ADMIN_IDS:
         return
         
@@ -3035,7 +3035,7 @@ def handle_document(message):
 
 @bot.message_handler(commands=['channel_info'])
 def channel_info(message):
-    ADMIN_IDS = [376068212, 827743984]
+    ADMIN_IDS = [7920066963, 827743984]
     if message.from_user.id not in ADMIN_IDS:
         return
     
@@ -3055,7 +3055,7 @@ def channel_info(message):
 @bot.message_handler(func=lambda message: message.chat.type in ['channel', 'supergroup'])
 def handle_channel_message(message):
     """Обработка сообщений в канале/группе"""
-    ADMIN_IDS = [376068212, 827743984]
+    ADMIN_IDS = [7920066963, 827743984]
     
     # Проверяем, есть ли админ в канале
     try:

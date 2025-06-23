@@ -1731,7 +1731,7 @@ def test_gkb_parser():
     
     try:
         # Читаем ваш файл
-        with open('debug_text_output_376068212_1c3e3593.txt', 'r', encoding='utf-8') as f:
+        with open('debug_text_output_7920066963_1c3e3593.txt', 'r', encoding='utf-8') as f:
             text = f.read()
         
         print("🚀 ТЕСТИРУЕМ ОБНОВЛЕННУЮ СИСТЕМУ ПАРСЕРОВ")
@@ -1793,7 +1793,7 @@ def test_gkb_parser():
         return result
         
     except FileNotFoundError:
-        print(f"❌ Файл debug_text_output_376068212_972e044a.txt не найден в текущей директории")
+        print(f"❌ Файл debug_text_output_7920066963_972e044a.txt не найден в текущей директории")
         print(f"📁 Текущая директория: {os.getcwd()}")
         print(f"📄 Попробуйте указать полный путь к файлу")
         return None
@@ -1809,7 +1809,7 @@ def test_gkb_parser_direct():
     """Прямой тест GKBParser без цепочки"""
     
     try:
-        with open('debug_text_output_376068212_1c3e3593.txt', 'r', encoding='utf-8') as f:
+        with open('debug_text_output_7920066963_1c3e3593.txt', 'r', encoding='utf-8') as f:
             text = f.read()
         
         print("🔍 ПРЯМОЙ ТЕСТ GKBParser")
