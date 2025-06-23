@@ -1270,15 +1270,47 @@ def main(message):
     # Проверка: есть ли пользователь в базе
     existing_user = users_collection.find_one({"user_id": user_id})
     if not existing_user:
-        # Добавляем нового пользователя
-        users_collection.insert_one({
-            "user_id": user_id,
-            "first_name": first_name,
-            "last_name": last_name,
-            "access": False,
-            "message_limit": 0,
-            "messages": []
-        })
+        # Проверяем, есть ли пользователь в коллекции миграции
+        migration_collection = db["user_migration"]
+        old_user = migration_collection.find_one({"user_id": user_id})
+        
+        if old_user:
+            # Восстанавливаем данные пользователя из коллекции миграции
+            restored_user = {
+                "user_id": user_id,
+                "first_name": first_name,
+                "last_name": last_name,
+                "access": old_user.get("access", False),
+                "message_limit": old_user.get("message_limit", 0),
+                "initial_message_limit": old_user.get("initial_message_limit", 0),
+                "messages": old_user.get("messages", []),
+                "created_at": old_user.get("created_at", datetime.now(timezone.utc)),
+                "migrated_at": datetime.now(timezone.utc),
+                "is_migrated": True
+            }
+            users_collection.insert_one(restored_user)
+            
+            # Отправляем уведомление о восстановлении
+            if old_user.get("access", False):
+                bot.send_message(
+                    message.chat.id,
+                    "🔄 **Данные восстановлены!**\n\n"
+                    f"✅ Ваш доступ к боту был восстановлен\n"
+                    f"💬 Лимит сообщений: {old_user.get('message_limit', 0)}\n\n"
+                    "Добро пожаловать обратно!",
+                    parse_mode='Markdown'
+                )
+        else:
+            # Добавляем нового пользователя
+            users_collection.insert_one({
+                "user_id": user_id,
+                "first_name": first_name,
+                "last_name": last_name,
+                "access": False,
+                "message_limit": 0,
+                "messages": [],
+                "created_at": datetime.now(timezone.utc)
+            })
     # 🛠 Заменили ручную разметку на универсальную
     markup = create_main_menu()
     
@@ -2309,6 +2341,208 @@ def broadcast_message(message):
         print(f"[ERROR broadcast] {e}")
         bot.reply_to(message, f"❌ Ошибка при подготовке рассылки: {str(e)}")
 
+@bot.message_handler(commands=['migrate_users'])
+def migrate_users(message):
+    """Помогает пользователям обновить их chat_id после смены токена бота"""
+    ADMIN_USER_IDS = [7920066963, 827743984]
+    if message.from_user.id not in ADMIN_USER_IDS:
+        bot.reply_to(message, "⛔ У вас нет прав для выполнения этой команды.")
+        return
+    
+    try:
+        # Получаем статистику пользователей
+        total_users = users_collection.count_documents({})
+        inactive_users = users_collection.count_documents({"is_active": False})
+        active_users = total_users - inactive_users
+        
+        # Создаем специальную коллекцию для миграции
+        migration_collection = db["user_migration"]
+        
+        # Очищаем старые записи миграции
+        migration_collection.delete_many({})
+        
+        # Копируем всех пользователей в коллекцию миграции
+        all_users = list(users_collection.find({}))
+        if all_users:
+            migration_collection.insert_many(all_users)
+        
+        response = (
+            f"🔄 **Инициализация миграции пользователей**\n\n"
+            f"👥 Всего пользователей в базе: {total_users}\n"
+            f"✅ Активных: {active_users}\n"
+            f"❌ Неактивных: {inactive_users}\n\n"
+            f"📝 **Инструкция для пользователей:**\n"
+            f"Отправьте старым пользователям сообщение:\n\n"
+            f"'🔄 Обновление бота! Для продолжения работы отправьте команду /start или любое сообщение боту.'\n\n"
+            f"📊 Используйте /migration_status для отслеживания прогресса"
+        )
+        
+        bot.send_message(message.chat.id, response, parse_mode='Markdown')
+        
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при инициализации миграции: {str(e)}")
+
+@bot.message_handler(commands=['migration_status'])
+def migration_status(message):
+    """Показывает статус миграции пользователей"""
+    ADMIN_USER_IDS = [7920066963, 827743984]
+    if message.from_user.id not in ADMIN_USER_IDS:
+        bot.reply_to(message, "⛔ У вас нет прав для выполнения этой команды.")
+        return
+    
+    try:
+        migration_collection = db["user_migration"]
+        
+        # Статистика из основной коллекции
+        total_users = users_collection.count_documents({})
+        new_users_today = users_collection.count_documents({
+            "created_at": {"$gte": datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)}
+        })
+        
+        # Статистика из коллекции миграции
+        old_users_count = migration_collection.count_documents({})
+        
+        # Находим пользователей, которые еще не мигрировали
+        migrated_users = []
+        for user in users_collection.find({}):
+            old_user = migration_collection.find_one({"user_id": user["user_id"]})
+            if old_user:
+                migrated_users.append(user["user_id"])
+        
+        response = (
+            f"📊 **Статус миграции пользователей**\n\n"
+            f"👥 Всего пользователей сейчас: {total_users}\n"
+            f"🆕 Новых пользователей сегодня: {new_users_today}\n"
+            f"📦 Пользователей до миграции: {old_users_count}\n"
+            f"✅ Успешно мигрировано: {len(migrated_users)}\n"
+            f"⏳ Осталось мигрировать: {old_users_count - len(migrated_users)}\n\n"
+            f"📈 Прогресс: {round((len(migrated_users) / old_users_count * 100) if old_users_count > 0 else 0, 1)}%"
+        )
+        
+        bot.send_message(message.chat.id, response, parse_mode='Markdown')
+        
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при получении статуса миграции: {str(e)}")
+
+@bot.message_handler(commands=['notify_old_users'])
+def notify_old_users(message):
+    """Отправляет уведомление старым пользователям о необходимости обновления"""
+    ADMIN_USER_IDS = [7920066963, 827743984]
+    if message.from_user.id not in ADMIN_USER_IDS:
+        bot.reply_to(message, "⛔ У вас нет прав для выполнения этой команды.")
+        return
+    
+    try:
+        # Получаем текст уведомления из команды
+        parts = message.text.split(' ', 1)
+        if len(parts) < 2:
+            default_text = (
+                "🔄 **Обновление бота!**\n\n"
+                "Для продолжения работы с ботом отправьте команду /start\n\n"
+                "Все ваши данные и доступы будут автоматически восстановлены."
+            )
+            notification_text = default_text
+        else:
+            notification_text = parts[1]
+        
+        migration_collection = db["user_migration"]
+        
+        # Получаем пользователей, которые еще не мигрировали
+        unmigrated_users = []
+        for old_user in migration_collection.find({}):
+            current_user = users_collection.find_one({"user_id": old_user["user_id"]})
+            if not current_user:
+                unmigrated_users.append(old_user)
+        
+        if not unmigrated_users:
+            bot.reply_to(message, "✅ Все пользователи уже мигрированы!")
+            return
+        
+        # Подтверждение отправки
+        confirmation_text = (
+            f"📨 **Уведомление старых пользователей**\n\n"
+            f"👥 Количество получателей: {len(unmigrated_users)}\n\n"
+            f"📝 **Текст уведомления:**\n{notification_text}\n\n"
+            f"⚠️ Отправить уведомление?"
+        )
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Отправить", callback_data="confirm_notify_old"),
+            types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_notify_old")
+        )
+        
+        # Сохраняем данные для callback
+        user_states[message.from_user.id] = {
+            "type": "notify_old_users",
+            "text": notification_text,
+            "users": unmigrated_users
+        }
+        
+        bot.send_message(message.chat.id, confirmation_text, reply_markup=markup, parse_mode='Markdown')
+        
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при подготовке уведомления: {str(e)}")
+
+@bot.message_handler(commands=['check_user'])
+def check_user(message):
+    """Проверяет статус конкретного пользователя"""
+    ADMIN_USER_IDS = [7920066963, 827743984]
+    if message.from_user.id not in ADMIN_USER_IDS:
+        bot.reply_to(message, "⛔ У вас нет прав для выполнения этой команды.")
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.reply_to(message, "⚠️ Формат: /check_user [user_id]\n\nПример: /check_user 123456789")
+            return
+        
+        user_id = int(parts[1])
+        
+        # Ищем пользователя в основной коллекции
+        current_user = users_collection.find_one({"user_id": user_id})
+        
+        # Ищем в коллекции миграции
+        migration_collection = db["user_migration"]
+        old_user = migration_collection.find_one({"user_id": user_id})
+        
+        response = f"🔍 **Проверка пользователя {user_id}**\n\n"
+        
+        if current_user:
+            response += (
+                f"✅ **Текущий статус:** Активен\n"
+                f"📅 Дата создания: {current_user.get('created_at', 'Неизвестно')}\n"
+                f"👤 Имя: {current_user.get('first_name', 'Неизвестно')}\n"
+                f"🔐 Доступ: {'Есть' if current_user.get('access', False) else 'Нет'}\n"
+                f"💬 Лимит сообщений: {current_user.get('message_limit', 0)}\n"
+            )
+        else:
+            response += "❌ **Текущий статус:** Не найден в активных пользователях\n"
+        
+        if old_user:
+            response += (
+                f"\n📦 **Статус до миграции:** Найден\n"
+                f"📅 Дата создания (старая): {old_user.get('created_at', 'Неизвестно')}\n"
+                f"👤 Имя (старое): {old_user.get('first_name', 'Неизвестно')}\n"
+                f"🔐 Доступ (старый): {'Есть' if old_user.get('access', False) else 'Нет'}\n"
+                f"💬 Лимит сообщений (старый): {old_user.get('message_limit', 0)}\n"
+            )
+            
+            if current_user:
+                response += "\n🔄 **Статус:** Пользователь успешно мигрирован"
+            else:
+                response += "\n⏳ **Статус:** Пользователь еще не мигрирован"
+        else:
+            response += "\n📦 **Статус до миграции:** Не найден"
+        
+        bot.send_message(message.chat.id, response, parse_mode='Markdown')
+        
+    except ValueError:
+        bot.reply_to(message, "❌ Неверный формат user_id. Введите число.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при проверке пользователя: {str(e)}")
+
 @bot.message_handler(commands=['grant_access'])
 def grant_access(message):
     """Даёт доступ пользователю"""
@@ -2572,6 +2806,51 @@ def handle_broadcast_callback(call):
     user_states.pop(call.from_user.id, None)
     bot.answer_callback_query(call.id, f"Рассылка завершена! Отправлено: {sent_count}")
 
+def handle_notify_old_callback(call):
+    """Обработка уведомления старых пользователей"""
+    ADMIN_USER_IDS = [7920066963, 827743984]
+    if call.from_user.id not in ADMIN_USER_IDS:
+        bot.answer_callback_query(call.id, "⛔ Доступ запрещен")
+        return
+    
+    user_state = user_states.get(call.from_user.id)
+    if not user_state or user_state.get("type") != "notify_old_users":
+        bot.answer_callback_query(call.id, "❌ Сессия истекла")
+        return
+    
+    if call.data == "cancel_notify_old":
+        bot.edit_message_text(
+            "❌ Уведомление отменено",
+            call.message.chat.id,
+            call.message.message_id
+        )
+        user_states.pop(call.from_user.id, None)
+        return
+    
+    # Подтверждение уведомления
+    notification_text = user_state["text"]
+    unmigrated_users = user_state["users"]
+    
+    # Начинаем уведомление (используем внешние способы связи, так как старый токен не работает)
+    bot.edit_message_text(
+        f"📨 **Инструкция для связи со старыми пользователями**\n\n"
+        f"👥 Количество пользователей: {len(unmigrated_users)}\n\n"
+        f"📝 **Текст для отправки:**\n{notification_text}\n\n"
+        f"🔧 **Способы связи:**\n"
+        f"• Через другие каналы связи\n"
+        f"• Через социальные сети\n"
+        f"• Личные сообщения\n\n"
+        f"📋 **Список пользователей для уведомления:**\n" +
+        "\n".join([f"• {user.get('first_name', 'Unknown')} (ID: {user['user_id']})" 
+                  for user in unmigrated_users[:10]]) +
+        (f"\n... и еще {len(unmigrated_users) - 10} пользователей" if len(unmigrated_users) > 10 else ""),
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode='Markdown'
+    )
+    
+    user_states.pop(call.from_user.id, None)
+
 # СЛОТЫ АДМИНИСТРАТОРА
 admin_manager = AdminConsultationManager(bot,user_states)
 
@@ -2702,6 +2981,8 @@ def handle_callback_query(call):
     # ДОБАВИТЬ ЭТИ СТРОКИ:
     elif call.data in ["confirm_broadcast", "cancel_broadcast"]:
         handle_broadcast_callback(call)
+    elif call.data in ["confirm_notify_old", "cancel_notify_old"]:
+        handle_notify_old_callback(call)
     elif call.data.startswith("confirm_day_"):
         handle_day_confirmation(call)
     elif call.data.startswith("cancel_day_"):
