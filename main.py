@@ -27,7 +27,7 @@ print(f"[INFO] Текущий режим: {os.getenv('ENV', 'prod')}")
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
-CHANNEL_ID = -1002275474152  # ID канала для проверки связи
+CHANNEL_ID = -1002684584475  # ID канала для проверки связи
 smart_handler = SmartHandler(bot)
 video_course_manager = VideoCourseManager(bot)
 
@@ -2696,10 +2696,10 @@ def handle_lesson_selection(call):
 
     # копируем видео-пост из приватного канала к пользователю
     try:
-        # channel_id = -1002275474152  (минус обязателен)
+        # channel_id = -1002684584475  (минус обязателен) 
         bot.copy_message(
             chat_id      = call.from_user.id,
-            from_chat_id = -1002275474152,
+            from_chat_id = -1002684584475,
             message_id   = int(lesson["video_url"].split("/")[-1]),
             protect_content=True
         )
